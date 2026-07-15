@@ -117,23 +117,19 @@ export async function seleccionarProyecto(proyectoId: string) {
 
 export async function eliminarProyecto(proyectoId: string) {
   await prisma.$transaction(async (tx) => {
-    // 1. Eliminar transacciones del proyecto
     await tx.transaccion.deleteMany({
       where: { proyectoId }
     });
 
-    // 2. Eliminar partidas del proyecto
     await tx.partida.deleteMany({
       where: { proyectoId }
     });
 
-    // 3. Eliminar el proyecto
     await tx.proyecto.delete({
       where: { id: proyectoId }
     });
   });
 
-  // Si el proyecto eliminado era el activo en la cookie, lo limpiamos o asignamos el siguiente
   const cookieStore = await cookies();
   const activeId = cookieStore.get('sipro_proyecto_id')?.value;
   if (activeId === proyectoId) {
@@ -181,6 +177,69 @@ export async function agregarPartidasAProyecto(
 
   revalidatePath('/presupuesto');
   revalidatePath('/');
+  return { success: true };
+}
+
+// ==========================================
+// ACCIONES PARA TESORERÍA Y CUENTAS BANCARIAS
+// ==========================================
+
+export async function crearCuentaBancaria(formData: {
+  banco: string;
+  numeroCuenta: string;
+  tipoCuenta: string;
+  moneda: string;
+  saldoInicial: number;
+}) {
+  const { banco, numeroCuenta, tipoCuenta, moneda, saldoInicial } = formData;
+
+  await prisma.cuentaBancaria.create({
+    data: {
+      banco,
+      numeroCuenta,
+      tipoCuenta,
+      moneda,
+      saldoActual: Number(saldoInicial) || 0
+    }
+  });
+
+  revalidatePath('/');
+  revalidatePath('/tesoreria');
+  revalidatePath('/egresos');
+  revalidatePath('/ingresos');
+  return { success: true };
+}
+
+export async function eliminarCuentaBancaria(id: string) {
+  await prisma.$transaction(async (tx) => {
+    // 1. Eliminar transacciones históricas vinculadas a esta cuenta
+    await tx.transaccion.deleteMany({
+      where: { cuentaBancariaId: id }
+    });
+
+    // 2. Eliminar la cuenta bancaria
+    await tx.cuentaBancaria.delete({
+      where: { id }
+    });
+  });
+
+  revalidatePath('/');
+  revalidatePath('/tesoreria');
+  revalidatePath('/egresos');
+  revalidatePath('/ingresos');
+  return { success: true };
+}
+
+export async function actualizarSaldoCuenta(id: string, nuevoSaldo: number) {
+  await prisma.cuentaBancaria.update({
+    where: { id },
+    data: {
+      saldoActual: Number(nuevoSaldo)
+    }
+  });
+
+  revalidatePath('/');
+  revalidatePath('/tesoreria');
   return { success: true };
 }
 
