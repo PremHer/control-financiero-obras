@@ -41,9 +41,19 @@ export default async function PresupuestoPage() {
       precioUnitario: p.precioUnitario,
       parcialPresupuesto: p.parcialPresupuesto,
       gastado,
-      saldo
+      saldo,
+      fechaInicioProg: p.fechaInicioProg,
+      fechaFinProg: p.fechaFinProg,
+      duracionDias: p.duracionDias,
+      porcentajeAvance: p.porcentajeAvance || 0
     };
   });
 
-  return <PresupuestoTable partidas={partidasConGastos} />;
+  return (
+    <PresupuestoTable
+      proyectoId={proyecto.id}
+      nombreProyecto={proyecto.nombre}
+      partidas={partidasConGastos}
+    />
+  );
 }

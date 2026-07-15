@@ -159,6 +159,10 @@ export async function agregarPartidasAProyecto(
     metrado: number;
     precioUnitario: number;
     parcialPresupuesto: number;
+    fechaInicioProg?: string;
+    fechaFinProg?: string;
+    duracionDias?: number;
+    porcentajeAvance?: number;
   }>
 ) {
   if (!partidas || partidas.length === 0) return { success: false, message: 'No hay partidas para importar' };
@@ -171,7 +175,11 @@ export async function agregarPartidasAProyecto(
       unidad: p.unidad || 'glb',
       metrado: Number(p.metrado) || 1,
       precioUnitario: Number(p.precioUnitario) || 0,
-      parcialPresupuesto: Number(p.parcialPresupuesto) || 0
+      parcialPresupuesto: Number(p.parcialPresupuesto) || 0,
+      fechaInicioProg: p.fechaInicioProg ? new Date(p.fechaInicioProg) : null,
+      fechaFinProg: p.fechaFinProg ? new Date(p.fechaFinProg) : null,
+      duracionDias: p.duracionDias ? Number(p.duracionDias) : null,
+      porcentajeAvance: p.porcentajeAvance ? Number(p.porcentajeAvance) : 0
     }))
   });
 
@@ -179,6 +187,87 @@ export async function agregarPartidasAProyecto(
   revalidatePath('/');
   return { success: true };
 }
+
+export async function agregarPartidaIndividual(formData: {
+  proyectoId: string;
+  item: string;
+  descripcion: string;
+  unidad: string;
+  metrado: number;
+  precioUnitario: number;
+  fechaInicioProg?: string;
+  fechaFinProg?: string;
+  duracionDias?: number;
+}) {
+  const {
+    proyectoId,
+    item,
+    descripcion,
+    unidad,
+    metrado,
+    precioUnitario,
+    fechaInicioProg,
+    fechaFinProg,
+    duracionDias
+  } = formData;
+
+  const parcialPresupuesto = Number(metrado) * Number(precioUnitario);
+
+  await prisma.partida.create({
+    data: {
+      proyectoId,
+      item,
+      descripcion,
+      unidad,
+      metrado: Number(metrado),
+      precioUnitario: Number(precioUnitario),
+      parcialPresupuesto,
+      fechaInicioProg: fechaInicioProg ? new Date(fechaInicioProg) : null,
+      fechaFinProg: fechaFinProg ? new Date(fechaFinProg) : null,
+      duracionDias: duracionDias ? Number(duracionDias) : null
+    }
+  });
+
+  revalidatePath('/presupuesto');
+  revalidatePath('/');
+  return { success: true };
+}
+
+export async function eliminarPartida(id: string) {
+  await prisma.$transaction(async (tx) => {
+    await tx.transaccion.deleteMany({ where: { partidaId: id } });
+    await tx.partida.delete({ where: { id } });
+  });
+
+  revalidatePath('/presupuesto');
+  revalidatePath('/');
+  return { success: true };
+}
+
+export async function actualizarCronogramaPartida(formData: {
+  id: string;
+  fechaInicioProg?: string;
+  fechaFinProg?: string;
+  duracionDias?: number;
+  porcentajeAvance?: number;
+}) {
+  const { id, fechaInicioProg, fechaFinProg, duracionDias, porcentajeAvance } = formData;
+
+  await prisma.partida.update({
+    where: { id },
+    data: {
+      fechaInicioProg: fechaInicioProg ? new Date(fechaInicioProg) : null,
+      fechaFinProg: fechaFinProg ? new Date(fechaFinProg) : null,
+      duracionDias: duracionDias ? Number(duracionDias) : null,
+      porcentajeAvance: porcentajeAvance !== undefined ? Number(porcentajeAvance) : undefined
+    }
+  });
+
+  revalidatePath('/presupuesto');
+  revalidatePath('/');
+  return { success: true };
+}
+
 
 // ==========================================
 // ACCIONES PARA TESORERÍA Y CUENTAS BANCARIAS

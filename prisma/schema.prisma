@@ -35,6 +35,12 @@ model Partida {
   precioUnitario     Float
   parcialPresupuesto Float
 
+  // Campos de Cronograma de Ejecución de Obra
+  fechaInicioProg    DateTime?
+  fechaFinProg       DateTime?
+  duracionDias       Int?
+  porcentajeAvance   Float         @default(0.00)
+
   creadoEn           DateTime      @default(now())
   actualizadoEn      DateTime      @updatedAt
 
