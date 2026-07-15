@@ -14,19 +14,19 @@ import {
   CheckCircle2, 
   AlertTriangle,
   Clock,
-  TrendingUp
+  TrendingUp,
+  Loader2
 } from 'lucide-react';
 import { 
   agregarPartidaIndividual, 
   agregarPartidasAProyecto, 
   eliminarPartida, 
-  actualizarCronogramaPartida 
+  actualizarCronogramaPartida,
+  extraerTextoPDFAction
 } from '@/app/actions';
 import { formatPEN, formatDate } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
 
 interface PartidaRow {
   id: string;
@@ -62,6 +62,7 @@ export default function PresupuestoTable({
   const [showImportModal, setShowImportModal] = useState(false);
   const [showEditCronograma, setShowEditCronograma] = useState<PartidaRow | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingPDF, setLoadingPDF] = useState(false);
   const [loadingDelete, setLoadingDelete] = useState<string | null>(null);
 
   // Formulario Add Partida
@@ -222,14 +223,40 @@ export default function PresupuestoTable({
     reader.readAsArrayBuffer(file);
   };
 
-  const handleParseText = () => {
+  // Subida y lectura automática de archivos PDF (.pdf)
+  const handlePDFFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     setErrorImport('');
-    if (!textoImport.trim()) {
-      setErrorImport('Pega las filas copiadas de tu Presupuesto o Cronograma de Obra.');
+    setLoadingPDF(true);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await extraerTextoPDFAction(formData);
+
+      if (!res.success || !res.text) {
+        setErrorImport(res.error || 'No se pudo extraer el contenido del archivo PDF.');
+      } else {
+        setTextoImport(res.text);
+        parseTextAndExtract(res.text);
+      }
+    } catch (err: any) {
+      setErrorImport('Error de conexión o lectura al procesar el archivo PDF.');
+    } finally {
+      setLoadingPDF(false);
+    }
+  };
+
+  const parseTextAndExtract = (rawTextInput?: string) => {
+    setErrorImport('');
+    const contentToParse = typeof rawTextInput === 'string' ? rawTextInput : textoImport;
+    if (!contentToParse.trim()) {
+      setErrorImport('Por favor sube tu archivo PDF o pega las filas copiadas.');
       return;
     }
 
-    const lines = textoImport.split(/\r?\n/);
+    const lines = contentToParse.split(/\r?\n/);
     const parsed: any[] = [];
 
     for (const line of lines) {
@@ -237,7 +264,6 @@ export default function PresupuestoTable({
       if (!clean) continue;
 
       if (importTab === 'PDF_PRESUPUESTO') {
-        // Regex para: ITEM | DESCRIPCION | UNIDAD | METRADO | P.UNIT | PARCIAL
         const matchRegex = /^([\d\.\-\_]+)\s+(.+?)\s+([a-zA-Z%23\/\'\"]{1,6})\s+([\d\,\.]+)\s+([\d\,\.]+)\s+([\d\,\.]+)$/;
         const match = clean.match(matchRegex);
 
@@ -250,19 +276,11 @@ export default function PresupuestoTable({
           const parc = Number(match[6].replace(/,/g, ''));
 
           if (!isNaN(parc) && parc > 0) {
-            parsed.push({
-              item,
-              descripcion: desc,
-              unidad: und,
-              metrado: met,
-              precioUnitario: pu,
-              parcialPresupuesto: parc
-            });
+            parsed.push({ item, descripcion: desc, unidad: und, metrado: met, precioUnitario: pu, parcialPresupuesto: parc });
             continue;
           }
         }
 
-        // Tab parser alternativo
         const tabs = clean.split(/\t/);
         if (tabs.length >= 4) {
           const item = tabs[0].trim();
@@ -277,8 +295,6 @@ export default function PresupuestoTable({
           }
         }
       } else if (importTab === 'PDF_CRONOGRAMA') {
-        // Regex/Parser para Cronograma: ITEM | DESCRIPCION | DURACION_DIAS | F_INICIO | F_FIN
-        // O si pega de MS Project: "01.01 EXCAVACION 15 días 01/08/2026 15/08/2026"
         const matchGantt = clean.match(/^([\d\.\-\_]+)\s+(.+?)\s+([\d]+)\s*(?:días|dias|d)?\s+([\d\/\-\.]+)\s+([\d\/\-\.]+)$/i);
         if (matchGantt) {
           const item = matchGantt[1];
@@ -295,33 +311,24 @@ export default function PresupuestoTable({
             precioUnitario: 0,
             parcialPresupuesto: 0,
             duracionDias: duracion,
-            fechaInicioProg: fIni.split('/').reverse().join('-'), // DD/MM/YYYY -> YYYY-MM-DD si aplica
+            fechaInicioProg: fIni.split('/').reverse().join('-'),
             fechaFinProg: fFin.split('/').reverse().join('-')
           });
           continue;
         }
 
-        // Tab parser para cronograma
         const tabs = clean.split(/\t/);
         if (tabs.length >= 3) {
           const item = tabs[0].trim();
           const desc = tabs[1].trim();
           const dur = Number(String(tabs[2] || '').replace(/\D/g, '')) || 10;
-          parsed.push({
-            item,
-            descripcion: desc,
-            unidad: 'glb',
-            metrado: 1,
-            precioUnitario: 0,
-            parcialPresupuesto: 0,
-            duracionDias: dur
-          });
+          parsed.push({ item, descripcion: desc, unidad: 'glb', metrado: 1, precioUnitario: 0, parcialPresupuesto: 0, duracionDias: dur });
         }
       }
     }
 
     if (parsed.length === 0) {
-      setErrorImport('No se detectó un formato válido en las filas. Asegúrate de copiar las columnas requeridas.');
+      setErrorImport('No se pudieron extraer partidas en el formato estándar. Verifica que el archivo o texto contenga el ítem y montos o duraciones por fila.');
     } else {
       setPartidasDetectadas(parsed);
     }
@@ -373,7 +380,7 @@ export default function PresupuestoTable({
             Control de Presupuesto y Cronograma de Ejecución
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Gestiona partidas, importa presupuestos en PDF/Excel o controla los tiempos de ejecución y avance físico en Gantt.
+            Gestiona partidas, sube archivos PDF o Excel de presupuesto, y controla los tiempos y avances físicos en Gantt.
           </p>
         </div>
 
@@ -409,9 +416,7 @@ export default function PresupuestoTable({
           <button
             onClick={() => setActiveView('PRESUPUESTO')}
             className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${
-              activeView === 'PRESUPUESTO'
-                ? 'bg-blue-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white'
+              activeView === 'PRESUPUESTO' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
             }`}
           >
             <DollarSign className="w-4 h-4" /> 💰 1. Control Presupuestal ({partidas.length} partidas)
@@ -419,16 +424,13 @@ export default function PresupuestoTable({
           <button
             onClick={() => setActiveView('CRONOGRAMA')}
             className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${
-              activeView === 'CRONOGRAMA'
-                ? 'bg-purple-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white'
+              activeView === 'CRONOGRAMA' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
             }`}
           >
             <Calendar className="w-4 h-4" /> 📅 2. Cronograma y Avance Físico
           </button>
         </div>
 
-        {/* Búsqueda y KPI rápido */}
         <div className="flex items-center gap-4">
           <div className="relative w-full sm:w-64">
             <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
@@ -718,7 +720,7 @@ export default function PresupuestoTable({
         </div>
       )}
 
-      {/* MODAL 2: IMPORTAR PARTIDAS EN LOTE (EXCEL / PDF PRESUPUESTO / PDF CRONOGRAMA) */}
+      {/* MODAL 2: IMPORTAR PARTIDAS EN LOTE (SUBIR ARCHIVO PDF DIRECTO O EXCEL) */}
       {showImportModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-scale-in">
@@ -732,7 +734,7 @@ export default function PresupuestoTable({
             <div className="flex border-b border-slate-800 bg-slate-950/60 px-6 pt-2 gap-2 shrink-0">
               <button
                 type="button"
-                onClick={() => setImportTab('EXCEL')}
+                onClick={() => { setImportTab('EXCEL'); setErrorImport(''); }}
                 className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition flex items-center gap-2 ${
                   importTab === 'EXCEL' ? 'bg-slate-900 text-emerald-400 border-t border-x border-slate-800' : 'text-slate-400 hover:text-white'
                 }`}
@@ -741,25 +743,25 @@ export default function PresupuestoTable({
               </button>
               <button
                 type="button"
-                onClick={() => setImportTab('PDF_PRESUPUESTO')}
+                onClick={() => { setImportTab('PDF_PRESUPUESTO'); setErrorImport(''); }}
                 className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition flex items-center gap-2 ${
                   importTab === 'PDF_PRESUPUESTO' ? 'bg-slate-900 text-blue-400 border-t border-x border-slate-800' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <FileText className="w-4 h-4 text-blue-400" /> Pegar Presupuesto en PDF (S10)
+                <FileText className="w-4 h-4 text-blue-400" /> Archivo PDF Presupuesto (S10)
               </button>
               <button
                 type="button"
-                onClick={() => setImportTab('PDF_CRONOGRAMA')}
+                onClick={() => { setImportTab('PDF_CRONOGRAMA'); setErrorImport(''); }}
                 className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition flex items-center gap-2 ${
                   importTab === 'PDF_CRONOGRAMA' ? 'bg-slate-900 text-purple-400 border-t border-x border-slate-800' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <Calendar className="w-4 h-4 text-purple-400" /> Pegar Cronograma Gantt / PDF
+                <Calendar className="w-4 h-4 text-purple-400" /> Archivo PDF Cronograma Gantt
               </button>
             </div>
 
-            <div className="p-6 overflow-y-auto space-y-4 flex-1">
+            <div className="p-6 overflow-y-auto space-y-5 flex-1">
               {errorImport && (
                 <div className="p-3.5 bg-rose-950 border border-rose-500 rounded-xl text-rose-300 text-xs flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
@@ -772,35 +774,68 @@ export default function PresupuestoTable({
                   <div className="border-2 border-dashed border-slate-800 hover:border-emerald-500/60 rounded-2xl p-6 text-center transition bg-slate-950/40">
                     <UploadCloud className="w-10 h-10 text-emerald-400 mx-auto mb-2" />
                     <label className="block text-xs font-semibold text-white cursor-pointer hover:underline">
-                      Seleccionar archivo Excel de Presupuesto o Cronograma (`.xlsx`)
+                      Seleccionar archivo Excel (`.xlsx`)
                       <input type="file" accept=".xlsx, .xls, .csv" onChange={handleExcelUpload} className="hidden" />
                     </label>
-                    <p className="text-[11px] text-slate-500 mt-1">Columnas detectadas: Ítem | Descripción | Und | Metrado | P. Unitario</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Columnas esperadas: Ítem | Descripción | Und | Metrado | P. Unitario</p>
                   </div>
                 </div>
               )}
 
               {(importTab === 'PDF_PRESUPUESTO' || importTab === 'PDF_CRONOGRAMA') && (
-                <div className="space-y-3">
-                  <label className="block text-xs font-semibold text-slate-300">
-                    {importTab === 'PDF_PRESUPUESTO'
-                      ? 'Pega las filas de tu Presupuesto PDF (Ej: 01.01.01 EXCAVACION m3 150.00 45.20 6780.00)'
-                      : 'Pega las filas de tu Cronograma de Obra (Ej: 01.01 EXCAVACION 15 días 01/08/2026 15/08/2026)'}
-                  </label>
-                  <textarea
-                    rows={6}
-                    value={textoImport}
-                    onChange={(e) => setTextoImport(e.target.value)}
-                    placeholder="Pega la tabla o líneas aquí..."
-                    className="w-full p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-200 focus:outline-none focus:border-purple-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleParseText}
-                    className="py-2 px-4 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-lg transition flex items-center gap-1.5"
-                  >
-                    <FileText className="w-3.5 h-3.5" /> Analizar Filas y Extraer Partidas
-                  </button>
+                <div className="space-y-4">
+                  {/* Zona principal: SUBIR ARCHIVO PDF (.pdf) DIRECTO */}
+                  <div className="border-2 border-dashed border-slate-800 hover:border-blue-500/60 rounded-2xl p-6 text-center transition bg-slate-950/60 relative">
+                    {loadingPDF ? (
+                      <div className="flex flex-col items-center justify-center py-3 space-y-2">
+                        <Loader2 className="w-8 h-8 text-blue-400 animate-spin" />
+                        <span className="text-xs font-semibold text-blue-300">Extrayendo tablas y analizando páginas de tu archivo PDF...</span>
+                      </div>
+                    ) : (
+                      <>
+                        <UploadCloud className="w-10 h-10 text-blue-400 mx-auto mb-2" />
+                        <label className="block text-xs font-bold text-white cursor-pointer hover:underline">
+                          Haz clic para subir y analizar tu archivo PDF (`.pdf`) directamente
+                          <input
+                            type="file"
+                            accept=".pdf"
+                            onChange={handlePDFFileUpload}
+                            className="hidden"
+                          />
+                        </label>
+                        <p className="text-[11px] text-slate-400 mt-1 max-w-md mx-auto">
+                          El servidor extraerá automáticamente todas las tablas del PDF ({importTab === 'PDF_PRESUPUESTO' ? 'S10 / Presupuesto' : 'Cronograma MS Project / Fechas'}) para organizarlas por partidas.
+                        </p>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Cuadro colapsado/secundario de texto copiado o extraído para revisión opcional */}
+                  <div className="space-y-2 pt-1 border-t border-slate-800/80">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold text-slate-400">
+                        Previsualización / Edición de texto extraído (O si prefieres pegar filas manualmente):
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => parseTextAndExtract()}
+                        className="py-1 px-3 bg-purple-600/80 hover:bg-purple-600 text-white text-[11px] font-bold rounded-lg transition flex items-center gap-1"
+                      >
+                        <FileText className="w-3 h-3" /> Re-analizar Texto
+                      </button>
+                    </div>
+                    <textarea
+                      rows={4}
+                      value={textoImport}
+                      onChange={(e) => setTextoImport(e.target.value)}
+                      placeholder={
+                        importTab === 'PDF_PRESUPUESTO'
+                          ? 'Al subir tu PDF aquí aparecerá su contenido para su análisis. También puedes pegar filas manualmente (Ej: 01.01 EXCAVACION m3 150 45.20 6780)'
+                          : 'Al subir tu PDF de Cronograma aquí aparecerá el texto. También puedes pegar filas (Ej: 01.01 EXCAVACION 15 días 01/08/2026 15/08/2026)'
+                      }
+                      className="w-full p-3 bg-slate-950 border border-slate-800 rounded-xl text-[11px] font-mono text-slate-300 focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
                 </div>
               )}
 

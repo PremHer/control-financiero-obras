@@ -1,22 +1,21 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
-  HardHat, 
-  Plus, 
   Building2, 
-  CheckCircle2, 
-  ArrowRight, 
-  MapPin, 
+  Plus, 
   Trash2, 
+  UploadCloud, 
   FileSpreadsheet, 
   FileText, 
-  UploadCloud, 
-  AlertTriangle 
+  ArrowRight, 
+  CheckCircle2, 
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
-import { crearProyecto, crearProyectoConPartidas, seleccionarProyecto, eliminarProyecto } from '@/app/actions';
+import { crearProyectoConPartidas, eliminarProyecto, extraerTextoPDFAction } from '@/app/actions';
 import { formatPEN, formatDate } from '@/lib/utils';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 
 interface ProyectoRow {
@@ -27,133 +26,79 @@ interface ProyectoRow {
   ubicacion: string;
   fechaInicio: Date | string;
   presupuestoTotal: number;
-}
-
-interface PartidaImportada {
-  item: string;
-  descripcion: string;
-  unidad: string;
-  metrado: number;
-  precioUnitario: number;
-  parcialPresupuesto: number;
+  creadoEn: Date | string;
+  totalPartidas?: number;
+  totalEgresos?: number;
+  saldoProyecto?: number;
 }
 
 export default function ProyectosClient({
   proyectos,
-  proyectoActivoId,
+  proyectoActivoId
 }: {
   proyectos: ProyectoRow[];
   proyectoActivoId?: string;
 }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [showModal, setShowModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<'MANUAL' | 'EXCEL' | 'PDF'>('MANUAL');
+  const [tab, setTab] = useState<'MANUAL' | 'EXCEL' | 'PDF'>('EXCEL');
   const [loading, setLoading] = useState(false);
-  const [loadingSelect, setLoadingSelect] = useState<string | null>(null);
+  const [loadingPDF, setLoadingPDF] = useState(false);
   const [loadingDelete, setLoadingDelete] = useState<string | null>(null);
 
-  // Abrir modal en modo importación si viene en URL
-  useEffect(() => {
-    if (searchParams.get('import') === 'true') {
-      setShowModal(true);
-      setActiveTab('EXCEL');
-    }
-  }, [searchParams]);
-
-  // Formulario de datos básicos de proyecto
-  const [codigo, setCodigo] = useState('');
+  // Formulario General
   const [nombre, setNombre] = useState('');
+  const [codigo, setCodigo] = useState('');
   const [cliente, setCliente] = useState('');
-  const [ubicacion, setUbicacion] = useState('');
+  const [ubicacion, setUbicacion] = useState('Cajamarca, Perú');
   const [fechaInicio, setFechaInicio] = useState(new Date().toISOString().split('T')[0]);
-  const [presupuestoTotal, setPresupuestoTotal] = useState<number | ''>('');
+  const [presupuestoTotalManual, setPresupuestoTotalManual] = useState<number | ''>('');
 
-  // Partidas importadas (para pestañas Excel / PDF)
-  const [partidasImportadas, setPartidasImportadas] = useState<PartidaImportada[]>([]);
-  const [textoPDF, setTextoPDF] = useState('');
+  // Importador en lote
+  const [textoImport, setTextoImport] = useState('');
   const [errorImport, setErrorImport] = useState('');
+  const [partidasDetectadas, setPartidasDetectadas] = useState<any[]>([]);
 
-  const handleCreateManual = async (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!codigo || !nombre || !cliente || !ubicacion || !presupuestoTotal) return;
+    if (!nombre || !codigo || !cliente) return;
 
     setLoading(true);
     try {
-      await crearProyecto({
-        codigo,
-        nombre,
-        cliente,
-        ubicacion,
-        fechaInicio,
-        presupuestoTotal: Number(presupuestoTotal),
-      });
-      closeAndReset();
-      router.refresh();
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCreateWithPartidas = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!codigo || !nombre || !cliente || !ubicacion) {
-      setErrorImport('Por favor completa los datos de la obra (Código, Nombre, Cliente y Ubicación).');
-      return;
-    }
-    if (partidasImportadas.length === 0) {
-      setErrorImport('No hay partidas detectadas para importar.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const presupuestoCalculado = partidasImportadas.reduce((acc, p) => acc + p.parcialPresupuesto, 0);
+      const sumaPartidas = partidasDetectadas.reduce((a, b) => a + (b.parcialPresupuesto || 0), 0);
       await crearProyectoConPartidas(
         {
-          codigo,
           nombre,
+          codigo,
           cliente,
           ubicacion,
           fechaInicio,
-          presupuestoTotal: presupuestoTotal ? Number(presupuestoTotal) : presupuestoCalculado,
+          presupuestoTotal: tab === 'MANUAL' ? Number(presupuestoTotalManual) || 0 : sumaPartidas
         },
-        partidasImportadas
+        partidasDetectadas
       );
-      closeAndReset();
+      setShowModal(false);
+      resetForm();
       router.refresh();
     } finally {
       setLoading(false);
     }
   };
 
-  const closeAndReset = () => {
-    setShowModal(false);
-    setCodigo('');
+  const resetForm = () => {
     setNombre('');
+    setCodigo('');
     setCliente('');
-    setUbicacion('');
-    setPresupuestoTotal('');
-    setPartidasImportadas([]);
-    setTextoPDF('');
+    setUbicacion('Cajamarca, Perú');
+    setFechaInicio(new Date().toISOString().split('T')[0]);
+    setPresupuestoTotalManual('');
+    setTextoImport('');
+    setPartidasDetectadas([]);
     setErrorImport('');
   };
 
-  const handleSelect = async (id: string) => {
-    setLoadingSelect(id);
-    try {
-      await seleccionarProyecto(id);
-      router.push('/');
-      router.refresh();
-    } finally {
-      setLoadingSelect(null);
-    }
-  };
-
   const handleDelete = async (id: string, nombreObra: string) => {
-    if (!window.confirm(`¿Estás completamente seguro de eliminar la obra "${nombreObra}" y todas sus partidas y egresos históricos? Esta acción es irreversible.`)) {
-      return;
-    }
+    if (!window.confirm(`¿Seguro de eliminar la obra "${nombreObra}" junto a todas sus partidas, egresos e ingresos en cascada?`)) return;
     setLoadingDelete(id);
     try {
       await eliminarProyecto(id);
@@ -163,9 +108,12 @@ export default function ProyectosClient({
     }
   };
 
-  // ==========================================
-  // PARSER DE EXCEL (.xlsx / .csv)
-  // ==========================================
+  const handleSelectProyecto = (id: string) => {
+    document.cookie = `sipro_proyecto_id=${id}; path=/; max-age=31536000; SameSite=Lax`;
+    router.push('/');
+    router.refresh();
+  };
+
   const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -180,14 +128,11 @@ export default function ProyectosClient({
         const worksheet = workbook.Sheets[firstSheetName];
         const jsonData: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
-        const parsed: PartidaImportada[] = [];
-        let totalCalculado = 0;
-
+        const parsed: any[] = [];
         for (let i = 0; i < jsonData.length; i++) {
           const row = jsonData[i];
           if (!row || row.length < 2) continue;
 
-          // Buscar filas donde la primera o segunda columna tenga patrón de ítem o descripción
           const col0 = String(row[0] || '').trim();
           const col1 = String(row[1] || '').trim();
           const col2 = String(row[2] || '').trim();
@@ -195,8 +140,7 @@ export default function ProyectosClient({
           const col4 = Number(row[4]) || 0;
           const col5 = Number(row[5]) || col3 * col4;
 
-          // Verificar que parezca una partida (ej. 01.01 o descripción clara)
-          if (/^\d+([\.\-\_]\d+)*$/.test(col0) && col1.length > 2) {
+          if (/^\d+([\.\-\_]\d+)*/.test(col0) && col1.length > 2) {
             parsed.push({
               item: col0,
               descripcion: col1,
@@ -205,56 +149,66 @@ export default function ProyectosClient({
               precioUnitario: col4 || col5,
               parcialPresupuesto: col5
             });
-            totalCalculado += col5;
-          } else if (col0.length > 3 && !isNaN(Number(row[1])) && Number(row[1]) > 0) {
-            // Caso en el que no hay ítem separado pero hay descripción y metrado/precio
-            parsed.push({
-              item: `P-${parsed.length + 1}`,
-              descripcion: col0,
-              unidad: col1 || 'glb',
-              metrado: Number(row[1]) || 1,
-              precioUnitario: Number(row[2]) || Number(row[3]) || 0,
-              parcialPresupuesto: Number(row[3]) || Number(row[2]) || 0
-            });
-            totalCalculado += (Number(row[3]) || Number(row[2]) || 0);
           }
         }
 
         if (parsed.length === 0) {
-          setErrorImport('No se pudieron detectar columnas válidas (Ítem, Descripción, Unidad, Metrado, Precio Unitario). Asegrate de que tu Excel tenga esas columnas.');
+          setErrorImport('No se detectaron partidas con el formato: [Ítem] [Descripción] [Und] [Metrado] [P.Unitario].');
         } else {
-          setPartidasImportadas(parsed);
-          if (!presupuestoTotal) setPresupuestoTotal(totalCalculado);
+          setPartidasDetectadas(parsed);
+          if (!nombre && file.name) setNombre(file.name.replace(/\.xlsx|\.xls|\.csv/i, '').replace(/_/g, ' '));
+          if (!codigo) setCodigo(`OBRA-${Math.floor(100 + Math.random() * 900)}`);
+          if (!cliente) setCliente('Gobierno Regional / Cliente');
         }
       } catch (err) {
-        setErrorImport('Error al procesar el archivo Excel.');
+        setErrorImport('Error al leer el archivo Excel.');
       }
     };
     reader.readAsArrayBuffer(file);
   };
 
-  // ==========================================
-  // PARSER DE PDF / TABLA PEGADA DE S10 OR CRONOGRAMA
-  // ==========================================
-  const handleParsePDFText = () => {
+  const handlePDFFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     setErrorImport('');
-    if (!textoPDF.trim()) {
-      setErrorImport('Por favor pega el texto del PDF de presupuesto o cronograma.');
+    setLoadingPDF(true);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await extraerTextoPDFAction(formData);
+
+      if (!res.success || !res.text) {
+        setErrorImport(res.error || 'No se pudo extraer el contenido del archivo PDF.');
+      } else {
+        setTextoImport(res.text);
+        if (!nombre && file.name) setNombre(file.name.replace(/\.pdf/i, '').replace(/_/g, ' '));
+        if (!codigo) setCodigo(`OBRA-${Math.floor(100 + Math.random() * 900)}`);
+        if (!cliente) setCliente('Gobierno Regional / Cliente');
+        parseTextAndExtract(res.text);
+      }
+    } catch (err: any) {
+      setErrorImport('Error de conexión al procesar el archivo PDF.');
+    } finally {
+      setLoadingPDF(false);
+    }
+  };
+
+  const parseTextAndExtract = (rawTextInput?: string) => {
+    setErrorImport('');
+    const contentToParse = typeof rawTextInput === 'string' ? rawTextInput : textoImport;
+    if (!contentToParse.trim()) {
+      setErrorImport('Sube tu archivo PDF o pega las filas aquí.');
       return;
     }
 
-    const lines = textoPDF.split(/\r?\n/);
-    const parsed: PartidaImportada[] = [];
-    let totalCalculado = 0;
+    const lines = contentToParse.split(/\r?\n/);
+    const parsed: any[] = [];
 
     for (const line of lines) {
       const clean = line.trim();
       if (!clean) continue;
 
-      // Expresión regular para capturar: ITEM | DESCRIPCION | UNIDAD | METRADO | P.UNIT | PARCIAL
-      // Ejemplos: 
-      // "01.01.01 EXCAVACION EN TERRENO NORMAL m3 1,200.00 15.50 18,600.00"
-      // "02.01 CONCRETO f'c=210 kg/cm2 GLB 1.00 5,000.00 5,000.00"
       const matchRegex = /^([\d\.\-\_]+)\s+(.+?)\s+([a-zA-Z%23\/\'\"]{1,6})\s+([\d\,\.]+)\s+([\d\,\.]+)\s+([\d\,\.]+)$/;
       const match = clean.match(matchRegex);
 
@@ -267,20 +221,11 @@ export default function ProyectosClient({
         const parc = Number(match[6].replace(/,/g, ''));
 
         if (!isNaN(parc) && parc > 0) {
-          parsed.push({
-            item,
-            descripcion: desc,
-            unidad: und,
-            metrado: met,
-            precioUnitario: pu,
-            parcialPresupuesto: parc
-          });
-          totalCalculado += parc;
+          parsed.push({ item, descripcion: desc, unidad: und, metrado: met, precioUnitario: pu, parcialPresupuesto: parc });
           continue;
         }
       }
 
-      // Parser alternativo por si las columnas están separadas por tabulador (copiado de tabla de PDF o MS Project)
       const tabs = clean.split(/\t/);
       if (tabs.length >= 4) {
         const item = tabs[0].trim();
@@ -291,326 +236,311 @@ export default function ProyectosClient({
         const parc = Number((tabs[5] || tabs[4] || tabs[3] || '0').replace(/,/g, '')) || met * pu;
 
         if (desc.length > 3 && /^\d+([\.\-\_]\d+)*/.test(item)) {
-          parsed.push({
-            item,
-            descripcion: desc,
-            unidad: und,
-            metrado: met,
-            precioUnitario: pu,
-            parcialPresupuesto: parc
-          });
-          totalCalculado += parc;
+          parsed.push({ item, descripcion: desc, unidad: und, metrado: met, precioUnitario: pu, parcialPresupuesto: parc });
         }
       }
     }
 
     if (parsed.length === 0) {
-      setErrorImport('No se detectaron partidas en el texto pegado. Asegrate de copiar las filas que contienen: [Ítem] [Descripción] [Unidad] [Metrado] [Precio Unitario] [Parcial].');
+      setErrorImport('No se detectó el formato de partidas S10. Asegúrate de que el PDF contenga la tabla de presupuesto.');
     } else {
-      setPartidasImportadas(parsed);
-      if (!presupuestoTotal) setPresupuestoTotal(totalCalculado);
+      setPartidasDetectadas(parsed);
+      if (!nombre && parsed[0]?.descripcion) setNombre(`Proyecto: ${parsed[0].descripcion.slice(0, 40)}`);
+      if (!codigo) setCodigo(`OBRA-${Math.floor(100 + Math.random() * 900)}`);
+      if (!cliente) setCliente('Gobierno Regional / Cliente');
     }
   };
 
   return (
-    <div className="space-y-8">
-      {/* Cabecera del módulo de proyectos */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl">
+    <div className="space-y-6">
+      {/* Cabecera */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl">
         <div>
           <h1 className="text-xl font-bold text-white flex items-center gap-2.5">
-            <Building2 className="w-6 h-6 text-blue-400" /> Cartera de Proyectos y Obras
+            <Building2 className="w-6 h-6 text-blue-400" /> Portafolio Multi-Obra / Proyectos
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Administra tus obras civiles, activa la obra en curso para control presupuestal o importa presupuestos desde archivos.
+            Administra todos tus contratos de obra, crea nuevos proyectos e importa presupuestos o cronogramas en segundos.
           </p>
         </div>
-        <div>
-          <button
-            onClick={() => {
-              setActiveTab('MANUAL');
-              setShowModal(true);
-            }}
-            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl text-xs flex items-center gap-2 transition shadow-lg shadow-blue-600/20"
-          >
-            <Plus className="w-4 h-4" /> + Registrar o Importar Obra
-          </button>
-        </div>
+
+        <button
+          onClick={() => { setShowModal(true); setPartidasDetectadas([]); setErrorImport(''); }}
+          className="px-5 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs flex items-center gap-2 transition shadow-lg shadow-blue-600/20 shrink-0"
+        >
+          <Plus className="w-4 h-4" /> + Registrar o Importar Obra
+        </button>
       </div>
 
       {/* Grid de Proyectos */}
-      {proyectos.length === 0 ? (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-4">
-          <HardHat className="w-12 h-12 text-slate-600 mx-auto" />
-          <p className="text-sm text-slate-400">No tienes obras registradas actualmente en este servidor.</p>
-          <button
-            onClick={() => setShowModal(true)}
-            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs shadow-lg"
-          >
-            + Crear o Importar Mi Primer Proyecto
-          </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {proyectos.map((prj) => {
-            const isActivo = prj.id === proyectoActivoId;
-            return (
-              <div
-                key={prj.id}
-                className={`bg-slate-900 border rounded-2xl p-6 flex flex-col justify-between transition relative overflow-hidden ${
-                  isActivo
-                    ? 'border-blue-500 ring-2 ring-blue-500/20 shadow-2xl shadow-blue-950'
-                    : 'border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                {isActivo && (
-                  <div className="absolute top-0 right-0 bg-blue-600 text-white text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-bl-xl flex items-center gap-1 shadow-md">
-                    <CheckCircle2 className="w-3 h-3" /> Obra Seleccionada
-                  </div>
-                )}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {proyectos.map((p) => {
+          const egresos = p.totalEgresos || 0;
+          const saldo = p.saldoProyecto !== undefined ? p.saldoProyecto : p.presupuestoTotal - egresos;
+          const partidasCount = p.totalPartidas || 0;
+          const avancePresupuesto = p.presupuestoTotal > 0 ? ((egresos / p.presupuestoTotal) * 100).toFixed(1) : '0.0';
+          return (
+            <div
+              key={p.id}
+              className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl p-6 transition flex flex-col justify-between shadow-xl group relative overflow-hidden"
+            >
+              <div>
+                <div className="flex items-start justify-between gap-2 mb-3">
+                  <span className="font-mono text-xs font-bold text-blue-400 bg-blue-950 px-2.5 py-1 rounded-md border border-blue-800/80">
+                    {p.codigo}
+                  </span>
+                  <button
+                    onClick={() => handleDelete(p.id, p.nombre)}
+                    disabled={loadingDelete === p.id}
+                    title="Eliminar este proyecto y todo su historial"
+                    className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/60 rounded-lg transition"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
 
-                <div className="space-y-4">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <span className="font-mono text-xs font-bold text-blue-400 bg-blue-950 px-2 py-0.5 rounded border border-blue-800">
-                        {prj.codigo}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => handleDelete(prj.id, prj.nombre)}
-                      disabled={loadingDelete === prj.id}
-                      title="Eliminar esta obra permanentemente"
-                      className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/60 rounded-lg transition"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                <h3 className="text-base font-bold text-white group-hover:text-blue-400 transition line-clamp-2">
+                  {p.nombre}
+                </h3>
+                <p className="text-xs text-slate-400 mt-1 flex items-center gap-1.5">
+                  🏢 {p.cliente} • 📍 {p.ubicacion}
+                </p>
 
-                  <div>
-                    <h3 className="text-lg font-bold text-white leading-snug">{prj.nombre}</h3>
-                    <div className="text-xs text-slate-400 flex items-center gap-1 mt-1">
-                      <MapPin className="w-3.5 h-3.5 text-slate-500 shrink-0" /> {prj.ubicacion}
-                    </div>
+                <div className="mt-5 space-y-2.5 border-t border-slate-800/80 pt-4">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-400">Presupuesto Directo:</span>
+                    <span className="font-mono font-bold text-slate-200">{formatPEN(p.presupuestoTotal)}</span>
                   </div>
-
-                  <div className="space-y-2 pt-3 border-t border-slate-800/80 text-xs">
-                    <div className="flex justify-between text-slate-400">
-                      <span>Cliente:</span>
-                      <span className="font-medium text-slate-200 truncate max-w-[180px]">{prj.cliente}</span>
-                    </div>
-                    <div className="flex justify-between text-slate-400">
-                      <span>Fecha Inicio:</span>
-                      <span className="font-mono text-slate-300">{formatDate(prj.fechaInicio)}</span>
-                    </div>
-                    <div className="flex justify-between text-slate-400">
-                      <span>Presupuesto Total:</span>
-                      <span className="font-bold text-emerald-400 font-mono">{formatPEN(prj.presupuestoTotal)}</span>
-                    </div>
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-400">Egresos Reales ({avancePresupuesto}%):</span>
+                    <span className="font-mono font-bold text-amber-400">{formatPEN(egresos)}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-400 font-bold">Saldo de Obra:</span>
+                    <span className="font-mono font-bold text-emerald-400">{formatPEN(saldo)}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-[11px] text-slate-500 pt-1">
+                    <span>Partidas Presupuestales:</span>
+                    <span className="font-mono font-bold text-slate-300">{partidasCount} ítems</span>
                   </div>
                 </div>
 
-                <div className="pt-6 mt-6 border-t border-slate-800/80 flex items-center gap-2">
-                  {isActivo ? (
-                    <button
-                      onClick={() => router.push('/')}
-                      className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-lg shadow-blue-600/20"
-                    >
-                      Ir al Panel de Control <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleSelect(prj.id)}
-                      disabled={loadingSelect === prj.id}
-                      className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs transition border border-slate-700"
-                    >
-                      {loadingSelect === prj.id ? 'Activando Obra...' : 'Seleccionar como Obra Activa'}
-                    </button>
-                  )}
+                <div className="w-full bg-slate-950 h-2 rounded-full mt-3 overflow-hidden border border-slate-800">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      Number(avancePresupuesto) > 90 ? 'bg-rose-500' : 'bg-blue-500'
+                    }`}
+                    style={{ width: `${Math.min(Number(avancePresupuesto), 100)}%` }}
+                  />
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
 
-      {/* Modal Nueva Obra & Importación */}
+              <div className="pt-5 mt-5 border-t border-slate-800 flex items-center justify-between">
+                <span className="text-[11px] text-slate-500">Inicio: {formatDate(p.fechaInicio)}</span>
+                <button
+                  onClick={() => handleSelectProyecto(p.id)}
+                  className="px-4 py-2 bg-blue-600/90 hover:bg-blue-600 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition shadow-lg shadow-blue-600/20"
+                >
+                  Administrar Obra <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* MODAL CREAR/IMPORTAR PROYECTO */}
       {showModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-scale-in">
-            {/* Header del Modal */}
             <div className="bg-slate-950 px-6 py-4 border-b border-slate-800 flex justify-between items-center shrink-0">
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Building2 className="w-5 h-5 text-blue-400" /> Registrar Obra e Importar Presupuesto
+                <UploadCloud className="w-5 h-5 text-blue-400" /> Registrar Nueva Obra e Importar Partidas
               </h3>
-              <button
-                onClick={closeAndReset}
-                className="text-slate-400 hover:text-white text-lg font-bold"
-              >
-                ✕
-              </button>
+              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-white text-lg font-bold">✕</button>
             </div>
 
-            {/* Pestañas de Modos de Creación */}
+            {/* Selector de Tabs */}
             <div className="flex border-b border-slate-800 bg-slate-950/60 px-6 pt-2 gap-2 shrink-0">
               <button
                 type="button"
-                onClick={() => setActiveTab('MANUAL')}
+                onClick={() => { setTab('EXCEL'); setErrorImport(''); }}
                 className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition flex items-center gap-2 ${
-                  activeTab === 'MANUAL'
-                    ? 'bg-slate-900 text-blue-400 border-t border-x border-slate-800'
-                    : 'text-slate-400 hover:text-slate-200'
+                  tab === 'EXCEL' ? 'bg-slate-900 text-emerald-400 border-t border-x border-slate-800' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <HardHat className="w-4 h-4" /> 1. Proyecto Manual
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400" /> Importar de Excel (.xlsx)
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab('EXCEL')}
+                onClick={() => { setTab('PDF'); setErrorImport(''); }}
                 className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition flex items-center gap-2 ${
-                  activeTab === 'EXCEL'
-                    ? 'bg-slate-900 text-emerald-400 border-t border-x border-slate-800'
-                    : 'text-slate-400 hover:text-slate-200'
+                  tab === 'PDF' ? 'bg-slate-900 text-blue-400 border-t border-x border-slate-800' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <FileSpreadsheet className="w-4 h-4 text-emerald-400" /> 2. Importar de Excel / CSV (`.xlsx`)
+                <FileText className="w-4 h-4 text-blue-400" /> Subir Archivo PDF Presupuesto (S10)
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab('PDF')}
+                onClick={() => { setTab('MANUAL'); setPartidasDetectadas([]); setErrorImport(''); }}
                 className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition flex items-center gap-2 ${
-                  activeTab === 'PDF'
-                    ? 'bg-slate-900 text-purple-400 border-t border-x border-slate-800'
-                    : 'text-slate-400 hover:text-slate-200'
+                  tab === 'MANUAL' ? 'bg-slate-900 text-purple-400 border-t border-x border-slate-800' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <FileText className="w-4 h-4 text-purple-400" /> 3. Importar de PDF (Tabla / S10)
+                <Plus className="w-4 h-4 text-purple-400" /> Creación Manual (Proyecto Vacío)
               </button>
             </div>
 
-            {/* Cuerpo del Modal scrollable */}
-            <div className="p-6 overflow-y-auto space-y-6 flex-1">
-              {errorImport && (
-                <div className="p-3.5 bg-rose-950 border border-rose-500 rounded-xl text-rose-300 text-xs flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-                  <span>{errorImport}</span>
-                </div>
-              )}
-
-              {/* Datos base de la obra (siempre visibles o necesarios) */}
-              <div className="space-y-4 bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
-                <div className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                  Datos Contractuales de la Obra
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">Código / Expediente</label>
+            <form onSubmit={handleCreate} className="p-6 overflow-y-auto space-y-5 flex-1">
+              {/* Datos Generales de la Obra */}
+              <div className="space-y-3 bg-slate-950/40 p-4 rounded-xl border border-slate-800/80">
+                <span className="text-xs font-bold text-slate-300 uppercase block">1. Datos Generales del Contrato / Obra</span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs text-slate-400 mb-1">Nombre Oficial de la Obra *</label>
                     <input
                       type="text"
-                      placeholder="Ej. OBRA-2026-LIMA"
-                      value={codigo}
-                      onChange={(e) => setCodigo(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white font-mono"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">Nombre Completo de la Obra</label>
-                    <input
-                      type="text"
-                      placeholder="Ej. Construcción del Colegio Gran Mariscal"
+                      placeholder="Ej. Mejoramiento del Canal de Riego..."
                       value={nombre}
                       onChange={(e) => setNombre(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white"
                       required
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">Cliente / Entidad</label>
+                    <label className="block text-xs text-slate-400 mb-1">Código o SNIP *</label>
                     <input
                       type="text"
-                      placeholder="Ej. Gobierno Regional de Lima"
+                      placeholder="Ej. OBRA-2026-01"
+                      value={codigo}
+                      onChange={(e) => setCodigo(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-white"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Cliente / Entidad *</label>
+                    <input
+                      type="text"
+                      placeholder="Ej. Gobierno Regional de Cajamarca"
                       value={cliente}
                       onChange={(e) => setCliente(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white"
                       required
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">Ubicación</label>
+                    <label className="block text-xs text-slate-400 mb-1">Ubicación / Región</label>
                     <input
                       type="text"
-                      placeholder="Ej. Lima / Cañete"
                       value={ubicacion}
                       onChange={(e) => setUbicacion(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
-                      required
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">Fecha de Inicio</label>
+                    <label className="block text-xs text-slate-400 mb-1">Fecha de Inicio</label>
                     <input
                       type="date"
                       value={fechaInicio}
                       onChange={(e) => setFechaInicio(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white"
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white"
                     />
                   </div>
+                </div>
+
+                {tab === 'MANUAL' && (
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                      Presupuesto Total (PEN) {partidasImportadas.length > 0 && '(Autocalculado)'}
-                    </label>
+                    <label className="block text-xs text-slate-400 mb-1">Presupuesto Total Directo (S/)</label>
                     <input
                       type="number"
                       step="0.01"
-                      placeholder="0.00"
-                      value={presupuestoTotal}
-                      onChange={(e) => setPresupuestoTotal(e.target.value ? Number(e.target.value) : '')}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-emerald-400 font-bold font-mono"
-                      required
+                      placeholder="Ej. 1500000.00"
+                      value={presupuestoTotalManual}
+                      onChange={(e) => setPresupuestoTotalManual(e.target.value ? Number(e.target.value) : '')}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono font-bold text-emerald-400"
                     />
                   </div>
-                </div>
+                )}
               </div>
 
-              {/* Pestaña 1: Manual */}
-              {activeTab === 'MANUAL' && (
-                <div className="py-4 text-center space-y-3">
-                  <p className="text-xs text-slate-400">
-                    Al crear la obra manualmente, podrás ir agregando las partidas de presupuesto de forma individual o en lote desde el módulo de Presupuesto.
-                  </p>
-                  <button
-                    onClick={handleCreateManual}
-                    disabled={loading}
-                    className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs shadow-lg shadow-blue-600/20 transition"
-                  >
-                    {loading ? 'Creando Obra...' : 'Crear Obra y Empezar'}
-                  </button>
-                </div>
-              )}
+              {/* Zona de Importación según Tab */}
+              {tab !== 'MANUAL' && (
+                <div className="space-y-3">
+                  <span className="text-xs font-bold text-slate-300 uppercase block">2. Cargar y Analizar Archivo de Partidas</span>
 
-              {/* Pestaña 2: Excel */}
-              {activeTab === 'EXCEL' && (
-                <div className="space-y-4">
-                  <div className="border-2 border-dashed border-slate-800 hover:border-emerald-500/60 rounded-2xl p-6 text-center transition bg-slate-950/40">
-                    <UploadCloud className="w-10 h-10 text-emerald-400 mx-auto mb-2" />
-                    <label className="block text-xs font-semibold text-white cursor-pointer hover:underline">
-                      Haz clic para seleccionar tu archivo Excel (`.xlsx` o `.csv`)
-                      <input
-                        type="file"
-                        accept=".xlsx, .xls, .csv"
-                        onChange={handleExcelUpload}
-                        className="hidden"
-                      />
-                    </label>
-                    <p className="text-[11px] text-slate-500 mt-1">
-                      Columnas sugeridas: Ítem | Descripción | Unidad | Metrado | Precio Unitario | Parcial
-                    </p>
-                  </div>
+                  {errorImport && (
+                    <div className="p-3 bg-rose-950 border border-rose-500 rounded-xl text-rose-300 text-xs flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span>{errorImport}</span>
+                    </div>
+                  )}
 
-                  {partidasImportadas.length > 0 && (
-                    <div className="space-y-2">
+                  {tab === 'EXCEL' ? (
+                    <div className="border-2 border-dashed border-slate-800 hover:border-emerald-500/60 rounded-2xl p-6 text-center transition bg-slate-950/40">
+                      <UploadCloud className="w-10 h-10 text-emerald-400 mx-auto mb-2" />
+                      <label className="block text-xs font-semibold text-white cursor-pointer hover:underline">
+                        Haz clic para seleccionar o arrastrar tu archivo Excel (`.xlsx`, `.csv`)
+                        <input type="file" accept=".xlsx, .xls, .csv" onChange={handleExcelUpload} className="hidden" />
+                      </label>
+                      <p className="text-[11px] text-slate-500 mt-1">Columnas detectadas: Ítem | Descripción | Und | Metrado | P. Unitario</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* SUBIR ARCHIVO PDF DIRECTO */}
+                      <div className="border-2 border-dashed border-slate-800 hover:border-blue-500/60 rounded-2xl p-6 text-center transition bg-slate-950/60">
+                        {loadingPDF ? (
+                          <div className="flex flex-col items-center justify-center py-3 space-y-2">
+                            <Loader2 className="w-8 h-8 text-blue-400 animate-spin" />
+                            <span className="text-xs font-semibold text-blue-300">Extrayendo tablas y analizando páginas de tu archivo PDF...</span>
+                          </div>
+                        ) : (
+                          <>
+                            <UploadCloud className="w-10 h-10 text-blue-400 mx-auto mb-2" />
+                            <label className="block text-xs font-bold text-white cursor-pointer hover:underline">
+                              Haz clic para subir tu archivo PDF de Presupuesto (`.pdf`) y extraer todas sus partidas
+                              <input type="file" accept=".pdf" onChange={handlePDFFileUpload} className="hidden" />
+                            </label>
+                            <p className="text-[11px] text-slate-400 mt-1">
+                              El servidor extraerá el contenido automáticamente y organizará ítems, metrados y precios.
+                            </p>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Cuadro de previsualización de texto copiado o extraído */}
+                      <div className="space-y-2 pt-1 border-t border-slate-800/80">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-semibold text-slate-400">
+                            Previsualización de texto extraído / O si prefieres pegar las filas manualmente:
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => parseTextAndExtract()}
+                            className="py-1 px-3 bg-purple-600/80 hover:bg-purple-600 text-white text-[11px] font-bold rounded-lg transition flex items-center gap-1"
+                          >
+                            <FileText className="w-3 h-3" /> Re-analizar Texto
+                          </button>
+                        </div>
+                        <textarea
+                          rows={4}
+                          value={textoImport}
+                          onChange={(e) => setTextoImport(e.target.value)}
+                          placeholder="Al subir el archivo PDF aparecerá aquí su contenido, o puedes pegar filas manualmente (Ej: 01.01 EXCAVACION m3 150 45.20 6780)"
+                          className="w-full p-3 bg-slate-950 border border-slate-800 rounded-xl text-[11px] font-mono text-slate-300 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {partidasDetectadas.length > 0 && (
+                    <div className="space-y-2 pt-2">
                       <div className="flex justify-between items-center text-xs font-bold text-emerald-400">
-                        <span>✅ {partidasImportadas.length} Partidas Detectadas</span>
-                        <span>Total Presupuesto: {formatPEN(partidasImportadas.reduce((a, b) => a + b.parcialPresupuesto, 0))}</span>
+                        <span className="flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" /> {partidasDetectadas.length} Partidas Detectadas</span>
+                        <span>Suma Directa: {formatPEN(partidasDetectadas.reduce((a, b) => a + (b.parcialPresupuesto || 0), 0))}</span>
                       </div>
                       <div className="max-h-48 overflow-y-auto border border-slate-800 rounded-xl">
                         <table className="w-full text-left text-[11px]">
@@ -625,7 +555,7 @@ export default function ProyectosClient({
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-800/60">
-                            {partidasImportadas.slice(0, 15).map((p, idx) => (
+                            {partidasDetectadas.slice(0, 15).map((p, idx) => (
                               <tr key={idx} className="hover:bg-slate-800/30 text-slate-300">
                                 <td className="p-2 font-mono text-blue-400">{p.item}</td>
                                 <td className="p-2">{p.descripcion}</td>
@@ -638,90 +568,22 @@ export default function ProyectosClient({
                           </tbody>
                         </table>
                       </div>
-                      {partidasImportadas.length > 15 && (
-                        <p className="text-[10px] text-slate-500 text-center">...y {partidasImportadas.length - 15} partidas más listas para importar</p>
-                      )}
                     </div>
                   )}
-
-                  <button
-                    onClick={handleCreateWithPartidas}
-                    disabled={loading || partidasImportadas.length === 0}
-                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white font-bold rounded-xl text-xs shadow-lg transition"
-                  >
-                    {loading ? 'Importando partidas y creando obra...' : `Importar ${partidasImportadas.length} Partidas y Activar Obra`}
-                  </button>
                 </div>
               )}
 
-              {/* Pestaña 3: PDF / S10 */}
-              {activeTab === 'PDF' && (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-purple-300 mb-1">
-                      Pega aquí las filas copiadas de tu Presupuesto o Cronograma en PDF (S10 / MS Project)
-                    </label>
-                    <textarea
-                      rows={5}
-                      value={textoPDF}
-                      onChange={(e) => setTextoPDF(e.target.value)}
-                      placeholder={`Pega el texto aquí. Ejemplo:\n01.01.01 EXCAVACION EN ZANJAS PARA CIMIENTOS M3 150.00 45.20 6,780.00\n01.01.02 SOLADO DE CONCRETO C:H 1:12 M2 120.00 25.00 3,000.00\n02.01 CONCRETO EN COLUMNAS f'c=210 kg/cm2 M3 85.00 380.00 32,300.00`}
-                      className="w-full p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-slate-200 focus:outline-none focus:border-purple-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleParsePDFText}
-                      className="mt-2 py-2 px-4 bg-purple-600/80 hover:bg-purple-600 text-white text-xs font-bold rounded-lg transition flex items-center gap-1.5"
-                    >
-                      <FileText className="w-3.5 h-3.5" /> Analizar e Identificar Partidas del Texto
-                    </button>
-                  </div>
-
-                  {partidasImportadas.length > 0 && (
-                    <div className="space-y-2">
-                      <div className="flex justify-between items-center text-xs font-bold text-purple-400">
-                        <span>✅ {partidasImportadas.length} Partidas Parseadas del PDF</span>
-                        <span>Total Presupuesto: {formatPEN(partidasImportadas.reduce((a, b) => a + b.parcialPresupuesto, 0))}</span>
-                      </div>
-                      <div className="max-h-48 overflow-y-auto border border-slate-800 rounded-xl">
-                        <table className="w-full text-left text-[11px]">
-                          <thead className="bg-slate-950 text-slate-400 uppercase">
-                            <tr>
-                              <th className="p-2">Ítem</th>
-                              <th className="p-2">Descripción</th>
-                              <th className="p-2">Und</th>
-                              <th className="p-2 text-right">Metrado</th>
-                              <th className="p-2 text-right">P.U.</th>
-                              <th className="p-2 text-right">Parcial</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-800/60">
-                            {partidasImportadas.slice(0, 15).map((p, idx) => (
-                              <tr key={idx} className="hover:bg-slate-800/30 text-slate-300">
-                                <td className="p-2 font-mono text-purple-400">{p.item}</td>
-                                <td className="p-2">{p.descripcion}</td>
-                                <td className="p-2">{p.unidad}</td>
-                                <td className="p-2 text-right font-mono">{p.metrado}</td>
-                                <td className="p-2 text-right font-mono">{p.precioUnitario}</td>
-                                <td className="p-2 text-right font-mono font-bold text-purple-400">{formatPEN(p.parcialPresupuesto)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={handleCreateWithPartidas}
-                    disabled={loading || partidasImportadas.length === 0}
-                    className="w-full py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-slate-800 text-white font-bold rounded-xl text-xs shadow-lg transition"
-                  >
-                    {loading ? 'Importando partidas y creando obra...' : `Crear Obra con ${partidasImportadas.length} Partidas del PDF`}
-                  </button>
-                </div>
-              )}
-            </div>
+              <div className="pt-3 flex justify-end gap-3 border-t border-slate-800">
+                <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2.5 bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold">Cancelar</button>
+                <button
+                  type="submit"
+                  disabled={loading || (tab !== 'MANUAL' && partidasDetectadas.length === 0)}
+                  className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white font-bold rounded-xl text-xs shadow-lg shadow-blue-600/20 transition"
+                >
+                  {loading ? 'Creando Obra...' : tab === 'MANUAL' ? 'Crear Obra Vacía' : `Crear Obra e Importar ${partidasDetectadas.length} Partidas`}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
