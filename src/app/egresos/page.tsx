@@ -1,15 +1,24 @@
 import { prisma } from '@/lib/prisma';
 import EgresoFormClient from '@/components/egresos/EgresoFormClient';
+import NoProjectsWelcome from '@/components/proyectos/NoProjectsWelcome';
 import { formatPEN, formatDate } from '@/lib/utils';
+import { cookies } from 'next/headers';
 
 export const dynamic = 'force-dynamic';
 
 export default async function EgresosPage() {
-  const proyecto = await prisma.proyecto.findFirst({
-    where: { codigo: 'OBRA-2026-CHUCO' }
-  });
+  const cookieStore = await cookies();
+  const proyectoIdCookie = cookieStore.get('sipro_proyecto_id')?.value;
 
-  if (!proyecto) return null;
+  let proyecto = null;
+  if (proyectoIdCookie) {
+    proyecto = await prisma.proyecto.findUnique({ where: { id: proyectoIdCookie } });
+  }
+  if (!proyecto) {
+    proyecto = await prisma.proyecto.findFirst({ orderBy: { creadoEn: 'desc' } });
+  }
+
+  if (!proyecto) return <NoProjectsWelcome />;
 
   const partidas = await prisma.partida.findMany({
     where: { proyectoId: proyecto.id },
@@ -60,7 +69,6 @@ export default async function EgresosPage() {
         cuentas={cuentas}
       />
 
-      {/* Historial de Egresos */}
       <div className="max-w-4xl mx-auto bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
         <h2 className="text-base font-bold text-white">Historial General de Egresos Registrados</h2>
         <div className="overflow-x-auto">

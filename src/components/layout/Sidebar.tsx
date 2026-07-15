@@ -10,11 +10,13 @@ import {
   TrendingUp, 
   Landmark, 
   Building2, 
-  ShieldCheck 
+  ShieldCheck,
+  HardHat
 } from 'lucide-react';
 
 const navigation = [
   { name: 'Dashboard Principal', href: '/', icon: LayoutDashboard },
+  { name: 'Gestión de Proyectos', href: '/proyectos', icon: Building2 },
   { name: 'Módulo de Presupuesto', href: '/presupuesto', icon: FileText },
   { name: 'Registro de Egresos', href: '/egresos', icon: TrendingDown },
   { name: 'Ingresos y Valorizaciones', href: '/ingresos', icon: TrendingUp },
@@ -30,7 +32,7 @@ export default function Sidebar() {
         {/* Logo corporativo */}
         <div className="h-16 px-6 flex items-center gap-3 border-b border-slate-800/80">
           <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-            <Building2 className="w-5 h-5" />
+            <HardHat className="w-5 h-5" />
           </div>
           <div>
             <div className="font-bold tracking-tight text-white text-sm">SIPRO - Obras</div>
@@ -52,7 +54,7 @@ export default function Sidebar() {
                 href={item.href}
                 className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition ${
                   isActive
-                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20 font-bold'
                     : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
                 }`}
               >

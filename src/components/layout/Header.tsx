@@ -1,19 +1,28 @@
-'use client';
-
 import React from 'react';
-import { HardHat, Bell, Search, MapPin } from 'lucide-react';
+import { Bell, Search } from 'lucide-react';
+import { prisma } from '@/lib/prisma';
+import { cookies } from 'next/headers';
+import ProjectSelector from '@/components/layout/ProjectSelector';
 
-export default function Header({ proyectoNombre = 'Mejoramiento del Canal de Riego Jesús - Chuco' }: { proyectoNombre?: string }) {
+export default async function Header() {
+  const proyectos = await prisma.proyecto.findMany({
+    select: {
+      id: true,
+      codigo: true,
+      nombre: true,
+      ubicacion: true,
+    },
+    orderBy: { creadoEn: 'desc' },
+  });
+
+  const cookieStore = await cookies();
+  const proyectoActivoId = cookieStore.get('sipro_proyecto_id')?.value;
+  const proyectoActivo = proyectos.find((p) => p.id === proyectoActivoId) || proyectos[0] || null;
+
   return (
     <header className="h-16 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-6 flex items-center justify-between sticky top-0 z-30">
       <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2 text-sm font-semibold text-white bg-slate-800/80 border border-slate-700 px-3.5 py-1.5 rounded-xl shadow-sm">
-          <HardHat className="w-4 h-4 text-amber-400 shrink-0" />
-          <span className="truncate max-w-[200px] md:max-w-md">{proyectoNombre}</span>
-          <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-slate-400 bg-slate-900 px-2 py-0.5 rounded-md border border-slate-800 ml-1">
-            <MapPin className="w-2.5 h-2.5 text-blue-400" /> Cajamarca
-          </span>
-        </div>
+        <ProjectSelector proyectos={proyectos} proyectoActivo={proyectoActivo} />
       </div>
 
       <div className="flex items-center gap-3">

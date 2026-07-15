@@ -1,15 +1,24 @@
 import { prisma } from '@/lib/prisma';
 import IngresoFormClient from '@/components/ingresos/IngresoFormClient';
+import NoProjectsWelcome from '@/components/proyectos/NoProjectsWelcome';
 import { formatPEN, formatDate } from '@/lib/utils';
+import { cookies } from 'next/headers';
 
 export const dynamic = 'force-dynamic';
 
 export default async function IngresosPage() {
-  const proyecto = await prisma.proyecto.findFirst({
-    where: { codigo: 'OBRA-2026-CHUCO' }
-  });
+  const cookieStore = await cookies();
+  const proyectoIdCookie = cookieStore.get('sipro_proyecto_id')?.value;
 
-  if (!proyecto) return null;
+  let proyecto = null;
+  if (proyectoIdCookie) {
+    proyecto = await prisma.proyecto.findUnique({ where: { id: proyectoIdCookie } });
+  }
+  if (!proyecto) {
+    proyecto = await prisma.proyecto.findFirst({ orderBy: { creadoEn: 'desc' } });
+  }
+
+  if (!proyecto) return <NoProjectsWelcome />;
 
   const clientes = await prisma.entidad.findMany({
     where: { tipo: 'CLIENTE' },

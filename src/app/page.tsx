@@ -1,25 +1,29 @@
 import { prisma } from '@/lib/prisma';
 import FinancialOverview from '@/components/dashboard/FinancialOverview';
+import NoProjectsWelcome from '@/components/proyectos/NoProjectsWelcome';
+import { cookies } from 'next/headers';
 
 export const dynamic = 'force-dynamic';
 
 export default async function DashboardPage() {
-  const proyecto = await prisma.proyecto.findFirst({
-    where: { codigo: 'OBRA-2026-CHUCO' }
-  });
+  const cookieStore = await cookies();
+  const proyectoIdCookie = cookieStore.get('sipro_proyecto_id')?.value;
 
+  let proyecto = null;
+  if (proyectoIdCookie) {
+    proyecto = await prisma.proyecto.findUnique({ where: { id: proyectoIdCookie } });
+  }
   if (!proyecto) {
-    return (
-      <div className="p-8 text-center text-slate-400">
-        No se encontró el proyecto principal. Ejecuta la semilla con <code className="bg-slate-800 text-blue-400 px-2 py-1 rounded">npm run db:seed</code>
-      </div>
-    );
+    proyecto = await prisma.proyecto.findFirst({ orderBy: { creadoEn: 'desc' } });
   }
 
-  // Cuentas bancarias de tesorería
+  // Si no hay ningún proyecto en toda la base de datos (BD recién iniciada en Railway)
+  if (!proyecto) {
+    return <NoProjectsWelcome />;
+  }
+
   const saldoCuentas = await prisma.cuentaBancaria.findMany();
 
-  // Calcular costo directo acumulado (sumatoria de transacciones de egreso)
   const egresosAgregados = await prisma.transaccion.aggregate({
     where: {
       proyectoId: proyecto.id,
@@ -33,7 +37,6 @@ export default async function DashboardPage() {
 
   const gastoAcumulado = egresosAgregados._sum.monto || 0;
 
-  // Últimas valorizaciones
   const ultimasValorizaciones = await prisma.transaccion.findMany({
     where: {
       proyectoId: proyecto.id,
@@ -43,7 +46,6 @@ export default async function DashboardPage() {
     take: 5
   });
 
-  // Últimos egresos
   const ultimosEgresos = await prisma.transaccion.findMany({
     where: {
       proyectoId: proyecto.id,
