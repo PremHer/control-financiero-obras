@@ -209,7 +209,8 @@ export default function ProyectosClient({
       const clean = line.trim();
       if (!clean) continue;
 
-      const matchRegex = /^([\d\.\-\_]+)\s+(.+?)\s+([a-zA-Z%23\/\'\"]{1,6})\s+([\d\,\.]+)\s+([\d\,\.]+)\s+([\d\,\.]+)$/;
+      // 1. Regex S10 Estándar (Ej: 02.01 DESBROCE Y LIMPIEZA DE VEGETACIÓN m2 3,837.60 1.42 5,449.39)
+      const matchRegex = /^([\d\.\-\_]+)\s+(.+?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})\s+([\d\,\.]+)\s+([\d\,\.]+)\s+([\d\,\.]+)$/;
       const match = clean.match(matchRegex);
 
       if (match) {
@@ -220,12 +221,59 @@ export default function ProyectosClient({
         const pu = Number(match[5].replace(/,/g, ''));
         const parc = Number(match[6].replace(/,/g, ''));
 
-        if (!isNaN(parc) && parc > 0) {
+        if (!isNaN(parc) && parc >= 0) {
           parsed.push({ item, descripcion: desc, unidad: und, metrado: met, precioUnitario: pu, parcialPresupuesto: parc });
           continue;
         }
       }
 
+      // 2. Regex Cronograma Gantt/MS Project (Ej: "3 1.1.1 CARTEL DE OBRA 4.80 m x 3.60 m 1 día")
+      const matchGantt = clean.match(/^(?:\d+\s+)?([\d\.\-\_]+)\s+(.+?)\s+(\d+)\s*(?:días|dias|día|dia|d)\b(?:\s+([\d\/\-\.]+)\s+([\d\/\-\.]+))?/i);
+      if (matchGantt) {
+        const item = matchGantt[1];
+        const desc = matchGantt[2];
+        const duracion = Number(matchGantt[3]);
+        const fIni = matchGantt[4] ? matchGantt[4].split('/').reverse().join('-') : undefined;
+        const fFin = matchGantt[5] ? matchGantt[5].split('/').reverse().join('-') : undefined;
+
+        parsed.push({
+          item,
+          descripcion: desc,
+          unidad: 'glb',
+          metrado: 1,
+          precioUnitario: 0,
+          parcialPresupuesto: 0,
+          duracionDias: duracion,
+          fechaInicioProg: fIni,
+          fechaFinProg: fFin
+        });
+        continue;
+      }
+
+      // 3. Flex S10 (con o sin ID inicial, 2 o 3 montos)
+      const s10Flex = clean.match(/^(?:\d+\s+)?([\d\.\-\_]+)\s+(.+?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})\s+([\d\,\.]+)\s+([\d\,\.]+)(?:\s+([\d\,\.]+))?$/);
+      if (s10Flex) {
+        const item = s10Flex[1];
+        const desc = s10Flex[2];
+        const und = s10Flex[3];
+        const n1 = Number(s10Flex[4].replace(/,/g, ''));
+        const n2 = Number(s10Flex[5].replace(/,/g, ''));
+        const n3 = s10Flex[6] ? Number(s10Flex[6].replace(/,/g, '')) : n1 * n2;
+
+        if (!isNaN(n2) && desc.length > 2) {
+          parsed.push({
+            item,
+            descripcion: desc,
+            unidad: und,
+            metrado: s10Flex[6] ? n1 : 1,
+            precioUnitario: s10Flex[6] ? n2 : n1,
+            parcialPresupuesto: s10Flex[6] ? n3 : n2
+          });
+          continue;
+        }
+      }
+
+      // 4. Tab o múltiples espacios
       const tabs = clean.includes('\t') ? clean.split(/\t/) : clean.split(/\s{2,}/);
       if (tabs.length >= 4) {
         const item = tabs[0].trim();
@@ -235,27 +283,15 @@ export default function ProyectosClient({
         const pu = Number((tabs[4] || tabs[3] || '0').replace(/,/g, '')) || 0;
         const parc = Number((tabs[5] || tabs[4] || tabs[3] || '0').replace(/,/g, '')) || met * pu;
 
-        if (desc.length > 3 && /^\d+([\.\-\_]\d+)*/.test(item)) {
+        if (desc.length > 2 && /^\d+([\.\-\_]\d+)*/.test(item)) {
           parsed.push({ item, descripcion: desc, unidad: und, metrado: met, precioUnitario: pu, parcialPresupuesto: parc });
           continue;
         }
       }
-
-      const s10Match = clean.match(/^(\d+[\.\d\-\_]*)\s+(.+?)\s+([a-zA-Z]{1,4})\s+([\d\,\.]+)\s+([\d\,\.]+)\s+([\d\,\.]+)$/);
-      if (s10Match) {
-        parsed.push({
-          item: s10Match[1],
-          descripcion: s10Match[2],
-          unidad: s10Match[3],
-          metrado: Number(s10Match[4].replace(/,/g, '')) || 1,
-          precioUnitario: Number(s10Match[5].replace(/,/g, '')) || 0,
-          parcialPresupuesto: Number(s10Match[6].replace(/,/g, '')) || 0
-        });
-      }
     }
 
     if (parsed.length === 0) {
-      setErrorImport('No se detectaron partidas en formato S10 o estándar en el PDF.');
+      setErrorImport('No se detectaron partidas en el documento. Verifica que las líneas contengan el código (Ej: 01.01 o 1.1.1), descripción y los montos o duración en días.');
     } else {
       setPartidasDetectadas(parsed);
       if (!nombre && parsed[0]?.descripcion) setNombre(`Proyecto: ${parsed[0].descripcion.slice(0, 40)}`);
