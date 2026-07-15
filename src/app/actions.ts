@@ -3,6 +3,8 @@
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { cookies } from 'next/headers';
+import { parsePdfBuffer } from '@/lib/pdf-service';
+
 export async function extraerTextoPDFAction(formData: FormData) {
   try {
     const file = formData.get('file') as File;
@@ -10,13 +12,9 @@ export async function extraerTextoPDFAction(formData: FormData) {
 
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-    
-    // Import dinámico compatible con ESM y CommonJS para Turbopack / Next.js Node runtime
-    const pdfModule = await import('pdf-parse');
-    const pdfFunc = (pdfModule as any).default || pdfModule;
-    const data = await typeof pdfFunc === 'function' ? pdfFunc(buffer) : (pdfModule as any)(buffer);
+    const text = await parsePdfBuffer(buffer);
 
-    return { success: true, text: data?.text || '' };
+    return { success: true, text };
   } catch (error: any) {
     console.error('Error procesando PDF en servidor:', error);
     return { success: false, error: error?.message || 'Error al procesar y extraer texto del archivo PDF.' };

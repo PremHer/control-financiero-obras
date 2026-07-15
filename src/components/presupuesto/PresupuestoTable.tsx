@@ -281,7 +281,7 @@ export default function PresupuestoTable({
           }
         }
 
-        const tabs = clean.split(/\t/);
+        const tabs = clean.includes('\t') ? clean.split(/\t/) : clean.split(/\s{2,}/);
         if (tabs.length >= 4) {
           const item = tabs[0].trim();
           const desc = tabs[1].trim();
@@ -292,7 +292,20 @@ export default function PresupuestoTable({
 
           if (desc.length > 3 && /^\d+([\.\-\_]\d+)*/.test(item)) {
             parsed.push({ item, descripcion: desc, unidad: und, metrado: met, precioUnitario: pu, parcialPresupuesto: parc });
+            continue;
           }
+        }
+
+        const s10Match = clean.match(/^(\d+[\.\d\-\_]*)\s+(.+?)\s+([a-zA-Z]{1,4})\s+([\d\,\.]+)\s+([\d\,\.]+)\s+([\d\,\.]+)$/);
+        if (s10Match) {
+          parsed.push({
+            item: s10Match[1],
+            descripcion: s10Match[2],
+            unidad: s10Match[3],
+            metrado: Number(s10Match[4].replace(/,/g, '')) || 1,
+            precioUnitario: Number(s10Match[5].replace(/,/g, '')) || 0,
+            parcialPresupuesto: Number(s10Match[6].replace(/,/g, '')) || 0
+          });
         }
       } else if (importTab === 'PDF_CRONOGRAMA') {
         const matchGantt = clean.match(/^([\d\.\-\_]+)\s+(.+?)\s+([\d]+)\s*(?:días|dias|d)?\s+([\d\/\-\.]+)\s+([\d\/\-\.]+)$/i);
@@ -317,8 +330,8 @@ export default function PresupuestoTable({
           continue;
         }
 
-        const tabs = clean.split(/\t/);
-        if (tabs.length >= 3) {
+        const tabs = clean.includes('\t') ? clean.split(/\t/) : clean.split(/\s{2,}/);
+        if (tabs.length >= 3 && /^\d+([\.\-\_]\d+)*/.test(tabs[0].trim())) {
           const item = tabs[0].trim();
           const desc = tabs[1].trim();
           const dur = Number(String(tabs[2] || '').replace(/\D/g, '')) || 10;
@@ -328,7 +341,7 @@ export default function PresupuestoTable({
     }
 
     if (parsed.length === 0) {
-      setErrorImport('No se pudieron extraer partidas en el formato estándar. Verifica que el archivo o texto contenga el ítem y montos o duraciones por fila.');
+      setErrorImport('No se detectaron partidas estándar en el documento. Verifica que las líneas contengan Ítem, Descripción y Montos/Duración.');
     } else {
       setPartidasDetectadas(parsed);
     }
