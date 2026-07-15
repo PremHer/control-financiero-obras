@@ -1,0 +1,108 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Proyecto {
+  id               String        @id @default(uuid())
+  codigo           String        @unique
+  nombre           String
+  cliente          String
+  ubicacion        String
+  fechaInicio      DateTime
+  fechaFinEstimada DateTime?
+  presupuestoTotal Float         @default(0.00)
+  creadoEn         DateTime      @default(now())
+  actualizadoEn    DateTime      @updatedAt
+
+  partidas         Partida[]
+  transacciones    Transaccion[]
+
+  @@map("proyectos")
+}
+
+model Partida {
+  id                 String        @id @default(uuid())
+  proyectoId         String
+  item               String        // Ej: "11.01.01"
+  descripcion        String
+  unidad             String        // Ej: "m3", "glb"
+  metrado            Float
+  precioUnitario     Float
+  parcialPresupuesto Float
+
+  creadoEn           DateTime      @default(now())
+  actualizadoEn      DateTime      @updatedAt
+
+  proyecto           Proyecto      @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
+  transacciones      Transaccion[]
+
+  @@unique([proyectoId, item])
+  @@index([proyectoId])
+  @@map("partidas")
+}
+
+model Entidad {
+  id            String        @id @default(uuid())
+  razonSocial   String
+  documento     String        @unique // RUC o DNI
+  tipo          String        // CLIENTE, PROVEEDOR, SUBCONTRATISTA, TRABAJADOR
+  telefono      String?
+  email         String?
+  direccion     String?
+  creadoEn      DateTime      @default(now())
+
+  transacciones Transaccion[]
+
+  @@map("entidades")
+}
+
+model CuentaBancaria {
+  id            String        @id @default(uuid())
+  banco         String
+  numeroCuenta  String
+  tipoCuenta    String        // CORRIENTE, DETRACCIONES, CAJA_CHICA
+  moneda        String        @default("PEN")
+  saldoActual   Float         @default(0.00)
+  creadoEn      DateTime      @default(now())
+  actualizadoEn DateTime      @updatedAt
+
+  transacciones Transaccion[]
+
+  @@map("cuentas_bancarias")
+}
+
+model Transaccion {
+  id                String        @id @default(uuid())
+  tipo              String        // INGRESO, EGRESO, VALORIZACION
+  fecha             DateTime      @default(now())
+  proyectoId        String
+  partidaId         String?       // Obligatorio en EGRESO
+  entidadId         String
+  cuentaBancariaId  String
+  monto             Float
+  tipoComprobante   String        // FACTURA, BOLETA, RESOLUCION, RECIBO
+  numeroComprobante String        // Ej: F001-000452
+  comprobanteUrl    String?
+  estado            String        @default("PENDIENTE") // PENDIENTE, PAGADO, COBRADO
+  observaciones     String?
+
+  creadoEn          DateTime      @default(now())
+  actualizadoEn     DateTime      @updatedAt
+
+  proyecto       Proyecto        @relation(fields: [proyectoId], references: [id])
+  partida        Partida?        @relation(fields: [partidaId], references: [id])
+  entidad        Entidad         @relation(fields: [entidadId], references: [id])
+  cuentaBancaria CuentaBancaria  @relation(fields: [cuentaBancariaId], references: [id])
+
+  @@index([proyectoId])
+  @@index([partidaId])
+  @@index([entidadId])
+  @@index([cuentaBancariaId])
+  @@index([fecha])
+  @@map("transacciones")
+}
