@@ -5,19 +5,32 @@ import { cookies } from 'next/headers';
 import ProjectSelector from '@/components/layout/ProjectSelector';
 
 export default async function Header() {
-  const proyectos = await prisma.proyecto.findMany({
-    select: {
-      id: true,
-      codigo: true,
-      nombre: true,
-      ubicacion: true,
-    },
-    orderBy: { creadoEn: 'desc' },
-  });
+  let proyectos: { id: string; codigo: string; nombre: string; ubicacion: string }[] = [];
+  let proyectoActivoId: string | undefined;
 
-  const cookieStore = await cookies();
-  const proyectoActivoId = cookieStore.get('sipro_proyecto_id')?.value;
-  const proyectoActivo = proyectos.find((p) => p.id === proyectoActivoId) || proyectos[0] || null;
+  try {
+    proyectos = await prisma.proyecto.findMany({
+      select: {
+        id: true,
+        codigo: true,
+        nombre: true,
+        ubicacion: true,
+      },
+      orderBy: { creadoEn: 'desc' },
+    });
+
+    const cookieStore = await cookies();
+    proyectoActivoId = cookieStore.get('sipro_proyecto_id')?.value;
+  } catch (err) {
+    // En fase de construcción (next build en Railway/Docker), la red a postgres.railway.internal no está activa.
+    // Capturamos el error para permitir prerenderizado estático de /_not-found sin romper el build.
+  }
+
+  const proyectoActivo = proyectos.find((p) => p.id === proyectoActivoId) || projectsOrFirst(proyectos);
+
+  function projectsOrFirst(list: typeof proyectos) {
+    return list.length > 0 ? list[0] : null;
+  }
 
   return (
     <header className="h-16 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-6 flex items-center justify-between sticky top-0 z-30">
