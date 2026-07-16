@@ -210,16 +210,16 @@ export default function ProyectosClient({
       const clean = raw.trim();
       if (!clean) continue;
 
-      if (/^S10\s+Página/i.test(clean) || /^Presupuesto\s+\d+/i.test(clean) || /^SALDO DE OBRA/i.test(clean) || /^Cliente\s+/i.test(clean) || /^Lugar\s+/i.test(clean) || /^Ítem\s+Descripción/i.test(clean)) {
+      if (/^S10\s+Página/i.test(clean) || /^Presupuesto\s+\d+/i.test(clean) || /^SALDO DE OBRA/i.test(clean) || /^Cliente\s+/i.test(clean) || /^Lugar\s+/i.test(clean) || /^Ítem\s+Descripción/i.test(clean) || /^Costo\s+al\s+/i.test(clean)) {
         continue;
       }
 
-      // Detener en el pie de presupuesto / supervisión para importar estrictamente el COSTO DIRECTO
+      // Detener en el pie o resumen de página para no cortar la lectura de las siguientes páginas
       if (/^(?:COSTO\s+DIRECTO|GASTOS\s+GENERALES|UTILIDAD|SUB\s*TOTAL|IGV|TOTAL\s+PRESUPUESTO|SUPERVISION|SUPERVISIÓN|GASTOS\s+DE\s+SUPERVISION|EXPEDIENTE|LIQUIDACION|LIQUIDACIÓN|SON:\s*)/i.test(clean)) {
-        break;
+        continue;
       }
 
-      if (/^[\d\.\-\_]+\s+/.test(clean) && !/^\d{4}\s+/.test(clean)) {
+      if (/^[\d\.\-\_]+\s+/.test(clean) && !/^\d{4,}\s+/.test(clean)) {
         lines.push(clean);
       } else if (lines.length > 0) {
         lines[lines.length - 1] += ' ' + clean;
@@ -235,10 +235,10 @@ export default function ProyectosClient({
       // 1. Algoritmo Heurístico Universal S10 (Extraer ítem al inicio)
       const matchCodigo = clean.match(/^([\d\.\-\_]+)\s+(.+)$/);
       if (matchCodigo) {
-        const item = matchCodigo[1];
+        const item = matchCodigo[1].trim();
         const resto = matchCodigo[2].trim();
 
-        if (item.length <= 15 && !/^\d{4}$/.test(item)) {
+        if (item.length <= 15 && !/^\d{4,}$/.test(item)) {
           // A) Extraer 3 números montos del final (Metrado, PU, Parcial)
           const match3Nums = resto.match(/^(.*?)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)$/);
           const match2Nums = resto.match(/^(.*?)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)$/);
@@ -288,6 +288,10 @@ export default function ProyectosClient({
               parsed.push({ item, descripcion: desc, unidad: esTit ? 'TITULO' : und, metrado: esTit ? '-' : 1, precioUnitario: esTit ? '-' : parc, parcialPresupuesto: esTit ? 0 : parc, montoReferencialTitulo: esTit ? parc : undefined, esTitulo: esTit });
               continue;
             }
+          }
+
+          if (resto.length > 2 && !resto.includes('Descripción')) {
+            parsed.push({ item, descripcion: resto, unidad: 'TITULO', metrado: '-', precioUnitario: '-', parcialPresupuesto: 0, esTitulo: true });
           }
         }
       }

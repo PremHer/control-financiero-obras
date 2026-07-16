@@ -266,8 +266,9 @@ export default function PresupuestoTable({
     }
   };
 
-  const parseTextAndExtract = (rawTextInput?: string) => {
+  const parseTextAndExtract = (rawTextInput?: string, overrideTab?: string) => {
     setErrorImport('');
+    const tabActual = overrideTab || importTab;
     const contentToParse = typeof rawTextInput === 'string' ? rawTextInput : textoImport;
     if (!contentToParse.trim()) {
       setErrorImport('Por favor sube tu archivo PDF o pega las filas copiadas.');
@@ -282,21 +283,21 @@ export default function PresupuestoTable({
       const clean = raw.trim();
       if (!clean) continue;
 
-      // Si empieza por encabezados de página S10 o fechas, ignorar
-      if (/^S10\s+Página/i.test(clean) || /^Presupuesto\s+\d+/i.test(clean) || /^SALDO DE OBRA/i.test(clean) || /^Cliente\s+/i.test(clean) || /^Lugar\s+/i.test(clean) || /^Ítem\s+Descripción/i.test(clean)) {
+      // Si empieza por encabezados de página S10, fechas, títulos de cliente o reportes, ignorar
+      if (/^S10\s+Página/i.test(clean) || /^Presupuesto\s+\d+/i.test(clean) || /^SALDO DE OBRA/i.test(clean) || /^Cliente\s+/i.test(clean) || /^Lugar\s+/i.test(clean) || /^Ítem\s+Descripción/i.test(clean) || /^Costo\s+al\s+/i.test(clean)) {
         continue;
       }
 
-      // Si llegamos al pie del presupuesto (Costo Directo, Supervisión, Gastos Generales, Utilidad, IGV), DETENER la importación de partidas para tomar solo ejecución
+      // Si es una línea de pie o resumen final de página S10 (Costo Directo, Supervisión, IGV, Son:), omitirla para no romper el parsing de las siguientes páginas
       if (/^(?:COSTO\s+DIRECTO|GASTOS\s+GENERALES|UTILIDAD|SUB\s*TOTAL|IGV|TOTAL\s+PRESUPUESTO|SUPERVISION|SUPERVISIÓN|GASTOS\s+DE\s+SUPERVISION|EXPEDIENTE|LIQUIDACION|LIQUIDACIÓN|SON:\s*)/i.test(clean)) {
-        break;
+        continue;
       }
 
-      // Si empieza con un código jerárquico (Ej: "01", "01.01", "1.1"), es nueva fila
-      if (/^[\d\.\-\_]+\s+/.test(clean) && !/^\d{4}\s+/.test(clean)) {
+      // Si empieza con un código jerárquico (Ej: "01", "01.01", "1.1"), es nueva fila de partida
+      if (/^[\d\.\-\_]+\s+/.test(clean) && !/^\d{4,}\s+/.test(clean)) {
         lines.push(clean);
       } else if (lines.length > 0) {
-        // Si no empieza con código, es la continuación de la descripción o montos de la línea anterior
+        // Si no empieza con código y estamos dentro de partidas, es la continuación de la descripción anterior
         lines[lines.length - 1] += ' ' + clean;
       }
     }
@@ -307,14 +308,14 @@ export default function PresupuestoTable({
       const clean = line.trim();
       if (!clean) continue;
 
-      if (importTab === 'PDF_PRESUPUESTO') {
+      if (tabActual === 'PDF_PRESUPUESTO') {
         const matchCodigo = clean.match(/^([\d\.\-\_]+)\s+(.+)$/);
         if (!matchCodigo) continue;
 
-        const item = matchCodigo[1];
+        const item = matchCodigo[1].trim();
         let resto = matchCodigo[2].trim();
 
-        if (item.length > 15 || /^\d{4}$/.test(item)) continue;
+        if (item.length > 15 || /^\d{4,}$/.test(item)) continue;
 
         // Intentar capturar 3 números al final (Metrado, PU, Parcial)
         const match3Nums = resto.match(/^(.*?)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)$/);
@@ -362,29 +363,17 @@ export default function PresupuestoTable({
             const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
             const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'TITULO';
 
-            // Si es un título jerárquico puro o cabecera con 1 solo monto al final (ej: "01 OBRAS PROVISIONALES 11,021.78")
-            // Lo identificamos con esTitulo: true y no suma al Costo Directo total para evitar duplicar montos
             const esTit = und === 'TITULO' || !item.includes('.');
             parsed.push({ item, descripcion: desc, unidad: esTit ? 'TITULO' : und, metrado: esTit ? '-' : 1, precioUnitario: esTit ? '-' : parc, parcialPresupuesto: esTit ? 0 : parc, montoReferencialTitulo: esTit ? parc : undefined, esTitulo: esTit });
             continue;
           }
         }
 
-        const tabs = clean.includes('\t') ? clean.split(/\t/) : clean.split(/\s{2,}/);
-        if (tabs.length >= 4 && /^\d+([\.\-\_]\d+)*/.test(tabs[0].trim())) {
-          const itemTab = tabs[0].trim();
-          const descTab = tabs[1].trim();
-          const undTab = tabs[2]?.trim() || 'glb';
-          const metTab = Number((tabs[3] || '1').replace(/,/g, '')) || 1;
-          const puTab = Number((tabs[4] || tabs[3] || '0').replace(/,/g, '')) || 0;
-          const parcTab = Number((tabs[5] || tabs[4] || tabs[3] || '0').replace(/,/g, '')) || metTab * puTab;
-
-          if (descTab.length > 2) {
-            parsed.push({ item: itemTab, descripcion: descTab, unidad: undTab, metrado: metTab, precioUnitario: puTab, parcialPresupuesto: parcTab, esTitulo: false });
-            continue;
-          }
+        // Si no coincidió con números al final pero tiene código de ítem y descripción (Ej: "01 OBRAS PROVISIONALES")
+        if (resto.length > 2 && !resto.includes('Descripción')) {
+          parsed.push({ item, descripcion: resto, unidad: 'TITULO', metrado: '-', precioUnitario: '-', parcialPresupuesto: 0, esTitulo: true });
         }
-      } else if (importTab === 'PDF_CRONOGRAMA') {
+      } else if (tabActual === 'PDF_CRONOGRAMA') {
         const matchGantt = clean.match(/^(?:\d+\s+)?([\d\.\-\_]+)\s+(.+?)\s+(\d+)\s*(?:días|dias|día|dia|d)\b(?:\s+([\d\/\-\.]+)\s+([\d\/\-\.]+))?/i);
         if (matchGantt) {
           const item = matchGantt[1];
@@ -904,7 +893,11 @@ export default function PresupuestoTable({
               </button>
               <button
                 type="button"
-                onClick={() => { setImportTab('PDF_PRESUPUESTO'); setErrorImport(''); }}
+                onClick={() => {
+                  setImportTab('PDF_PRESUPUESTO');
+                  setErrorImport('');
+                  if (textoImport.trim()) parseTextAndExtract(textoImport, 'PDF_PRESUPUESTO');
+                }}
                 className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition flex items-center gap-2 ${
                   importTab === 'PDF_PRESUPUESTO' ? 'bg-slate-900 text-blue-400 border-t border-x border-slate-800' : 'text-slate-400 hover:text-white'
                 }`}
@@ -913,7 +906,11 @@ export default function PresupuestoTable({
               </button>
               <button
                 type="button"
-                onClick={() => { setImportTab('PDF_CRONOGRAMA'); setErrorImport(''); }}
+                onClick={() => {
+                  setImportTab('PDF_CRONOGRAMA');
+                  setErrorImport('');
+                  if (textoImport.trim()) parseTextAndExtract(textoImport, 'PDF_CRONOGRAMA');
+                }}
                 className={`py-2.5 px-4 text-xs font-bold rounded-t-xl transition flex items-center gap-2 ${
                   importTab === 'PDF_CRONOGRAMA' ? 'bg-slate-900 text-purple-400 border-t border-x border-slate-800' : 'text-slate-400 hover:text-white'
                 }`}
