@@ -347,12 +347,26 @@ export default function ProyectosClient({
       }
     }
 
+    // Función de comparación jerárquica natural WBS / EDT (Ej: 1.1 < 1.2 < 1.10)
+    const compareEDT = (itemA: string, itemB: string) => {
+      const partsA = (itemA || '').split(/[\.\-\_]/).map(Number);
+      const partsB = (itemB || '').split(/[\.\-\_]/).map(Number);
+      const len = Math.max(partsA.length, partsB.length);
+      for (let i = 0; i < len; i++) {
+        const numA = isNaN(partsA[i]) ? -1 : partsA[i];
+        const numB = isNaN(partsB[i]) ? -1 : partsB[i];
+        if (numA !== numB) return numA - numB;
+      }
+      return (itemA || '').localeCompare(itemB || '', undefined, { numeric: true, sensitivity: 'base' });
+    };
+
     if (parsed.length === 0) {
       setErrorImport('No se detectaron partidas en el documento. Verifica que las filas del PDF o texto extraído contengan código, descripción y montos/duración.');
       setPartidasDetectadas([]);
     } else {
-      setPartidasDetectadas(parsed);
-      if (!nombre && parsed[0]?.descripcion) setNombre(`Proyecto: ${parsed[0].descripcion.slice(0, 40)}`);
+      const sorted = parsed.sort((a, b) => compareEDT(a.item, b.item));
+      setPartidasDetectadas(sorted);
+      if (!nombre && sorted[0]?.descripcion) setNombre(`Proyecto: ${sorted[0].descripcion.slice(0, 40)}`);
       if (!codigo) setCodigo(`OBRA-${Math.floor(100 + Math.random() * 900)}`);
       if (!cliente) setCliente('Gobierno Regional / Cliente');
     }
@@ -664,24 +678,34 @@ export default function ProyectosClient({
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-800/60">
-                            {partidasDetectadas.slice(0, 80).map((p, idx) => (
-                              <tr key={idx} className={`hover:bg-slate-800/30 ${p.esTitulo ? 'bg-slate-950/60 text-amber-300 font-semibold' : 'text-slate-300'}`}>
-                                <td className="p-2 font-mono text-blue-400">{p.item}</td>
-                                <td className="p-2">{p.descripcion}</td>
-                                <td className="p-2">
-                                  {p.esTitulo ? <span className="bg-amber-950/80 text-amber-400 px-1.5 py-0.5 rounded text-[10px]">TÍTULO</span> : p.unidad}
-                                </td>
-                                <td className="p-2 text-right font-mono">{p.metrado}</td>
-                                <td className="p-2 text-right font-mono">{p.precioUnitario}</td>
-                                <td className="p-2 text-right font-mono font-bold">
-                                  {p.esTitulo ? (
-                                    <span className="text-amber-400/80">{formatPEN(p.montoReferencialTitulo || 0)}</span>
-                                  ) : (
-                                    <span className="text-emerald-400">{formatPEN(p.parcialPresupuesto || 0)}</span>
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
+                            {partidasDetectadas.slice(0, 80).map((p, idx) => {
+                              const partes = (p.item || '').split(/[\.\-\_]/).filter(Boolean);
+                              const nivel = Math.max(0, partes.length - 1);
+                              return (
+                                <tr key={idx} className={`hover:bg-slate-800/30 ${p.esTitulo ? 'bg-slate-950/80 text-amber-300 font-bold border-t border-slate-800' : 'text-slate-300'}`}>
+                                  <td className="p-2 font-mono whitespace-nowrap" style={{ paddingLeft: `${nivel * 1 + 0.5}rem` }}>
+                                    <span className={p.esTitulo ? 'text-amber-400' : 'text-blue-400'}>
+                                      {p.esTitulo && (nivel === 0 ? '📂 ' : '└─ ')}
+                                      {!p.esTitulo && nivel > 0 && '├─ '}
+                                      {p.item}
+                                    </span>
+                                  </td>
+                                  <td className="p-2">{p.descripcion}</td>
+                                  <td className="p-2">
+                                    {p.esTitulo ? <span className="bg-amber-950/80 text-amber-400 px-1.5 py-0.5 rounded text-[10px]">TÍTULO</span> : p.unidad}
+                                  </td>
+                                  <td className="p-2 text-right font-mono">{p.metrado}</td>
+                                  <td className="p-2 text-right font-mono">{p.precioUnitario}</td>
+                                  <td className="p-2 text-right font-mono font-bold">
+                                    {p.esTitulo ? (
+                                      <span className="text-amber-400/80">{formatPEN(p.montoReferencialTitulo || 0)}</span>
+                                    ) : (
+                                      <span className="text-emerald-400">{formatPEN(p.parcialPresupuesto || 0)}</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>

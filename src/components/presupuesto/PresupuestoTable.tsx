@@ -42,6 +42,7 @@ interface PartidaRow {
   fechaFinProg?: Date | string | null;
   duracionDias?: number | null;
   porcentajeAvance?: number;
+  esTitulo?: boolean;
 }
 
 export default function PresupuestoTable({
@@ -87,11 +88,28 @@ export default function PresupuestoTable({
   const [errorImport, setErrorImport] = useState('');
   const [partidasDetectadas, setPartidasDetectadas] = useState<any[]>([]);
 
-  const filtered = partidas.filter(
-    (p) =>
-      p.item.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.descripcion.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Función de comparación jerárquica natural para códigos EDT / WBS (Ej: 1.1 < 1.2 < 1.10 < 1.10.1)
+  const compareEDT = (itemA: string, itemB: string) => {
+    const partsA = itemA.split(/[\.\-\_]/).map(Number);
+    const partsB = itemB.split(/[\.\-\_]/).map(Number);
+    const len = Math.max(partsA.length, partsB.length);
+    for (let i = 0; i < len; i++) {
+      const numA = isNaN(partsA[i]) ? -1 : partsA[i];
+      const numB = isNaN(partsB[i]) ? -1 : partsB[i];
+      if (numA !== numB) {
+        return numA - numB;
+      }
+    }
+    return itemA.localeCompare(itemB, undefined, { numeric: true, sensitivity: 'base' });
+  };
+
+  const filtered = partidas
+    .filter(
+      (p) =>
+        p.item.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        p.descripcion.toLowerCase().includes(searchTerm.toLowerCase())
+    )
+    .sort((a, b) => compareEDT(a.item, b.item));
 
   const totalPresupuestado = partidas.reduce((acc, p) => acc + p.parcialPresupuesto, 0);
   const totalGastado = partidas.reduce((acc, p) => acc + p.gastado, 0);
@@ -425,7 +443,7 @@ export default function PresupuestoTable({
       setErrorImport('No se detectaron partidas en la tabla. Verifica que las filas del PDF o texto extraído contengan código, descripción y montos/duración.');
       setPartidasDetectadas([]);
     } else {
-      setPartidasDetectadas(parsed);
+      setPartidasDetectadas(parsed.sort((a, b) => compareEDT(a.item, b.item)));
     }
   };
 
@@ -573,29 +591,56 @@ export default function PresupuestoTable({
                 ) : (
                   filtered.map((p) => {
                     const porcentaje = p.parcialPresupuesto > 0 ? ((p.gastado / p.parcialPresupuesto) * 100).toFixed(1) : '0.0';
+                    const partesItem = p.item.split(/[\.\-\_]/).filter(Boolean);
+                    const nivel = Math.max(0, partesItem.length - 1);
+                    const esPadre = p.esTitulo || p.unidad === 'TITULO' || filtered.some((o) => o.item !== p.item && o.item.startsWith(p.item + '.'));
+
                     return (
-                      <tr key={p.id} className="hover:bg-slate-800/40 transition group">
-                        <td className="py-3.5 px-4 font-mono font-bold text-blue-400 whitespace-nowrap">{p.item}</td>
-                        <td className="py-3.5 px-4 font-medium text-slate-100 max-w-sm">
-                          {p.descripcion}
-                          <div className="w-full bg-slate-950 h-1.5 rounded-full mt-2 overflow-hidden border border-slate-800/80">
-                            <div
-                              className={`h-full rounded-full transition-all duration-500 ${
-                                Number(porcentaje) > 90 ? 'bg-rose-500' : 'bg-blue-500'
-                              }`}
-                              style={{ width: `${Math.min(Number(porcentaje), 100)}%` }}
-                            />
-                          </div>
+                      <tr
+                        key={p.id}
+                        className={`transition group ${
+                          esPadre
+                            ? 'bg-slate-950/90 font-bold border-t border-slate-800 text-amber-200'
+                            : 'hover:bg-slate-800/40 text-slate-300'
+                        }`}
+                      >
+                        <td className="py-3.5 px-4 font-mono font-bold whitespace-nowrap" style={{ paddingLeft: `${nivel * 1.5 + 1}rem` }}>
+                          <span className={esPadre ? 'text-amber-400' : 'text-blue-400'}>
+                            {esPadre && (nivel === 0 ? '📂 ' : '└─ ')}
+                            {!esPadre && nivel > 0 && '├─ '}
+                            {p.item}
+                          </span>
                         </td>
-                        <td className="py-3.5 px-4 text-center font-mono text-slate-400">{p.unidad}</td>
-                        <td className="py-3.5 px-4 text-right font-mono text-slate-300">{p.metrado.toLocaleString('es-PE')}</td>
-                        <td className="py-3.5 px-4 text-right font-mono text-slate-400">{formatPEN(p.precioUnitario)}</td>
-                        <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-200">{formatPEN(p.parcialPresupuesto)}</td>
+                        <td className="py-3.5 px-4 max-w-sm">
+                          <span className={esPadre ? 'text-amber-300 font-bold uppercase tracking-wide' : 'text-slate-100 font-medium'}>
+                            {p.descripcion}
+                          </span>
+                          {!esPadre && p.parcialPresupuesto > 0 && (
+                            <div className="w-full bg-slate-950 h-1.5 rounded-full mt-2 overflow-hidden border border-slate-800/80">
+                              <div
+                                className={`h-full rounded-full transition-all duration-500 ${
+                                  Number(porcentaje) > 90 ? 'bg-rose-500' : 'bg-blue-500'
+                                }`}
+                                style={{ width: `${Math.min(Number(porcentaje), 100)}%` }}
+                              />
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-center font-mono">
+                          {esPadre ? <span className="bg-amber-950/80 text-amber-400 px-1.5 py-0.5 rounded text-[10px]">TÍTULO</span> : p.unidad}
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-mono text-slate-300">{esPadre ? '-' : p.metrado?.toLocaleString('es-PE')}</td>
+                        <td className="py-3.5 px-4 text-right font-mono text-slate-400">{esPadre ? '-' : formatPEN(p.precioUnitario)}</td>
+                        <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-200">{esPadre ? '-' : formatPEN(p.parcialPresupuesto)}</td>
                         <td className="py-3.5 px-4 text-right font-mono font-bold text-amber-400">
-                          {formatPEN(p.gastado)}
-                          <span className="block text-[10px] text-slate-500">{porcentaje}%</span>
+                          {esPadre ? '-' : (
+                            <>
+                              {formatPEN(p.gastado)}
+                              <span className="block text-[10px] text-slate-500">{porcentaje}%</span>
+                            </>
+                          )}
                         </td>
-                        <td className="py-3.5 px-4 text-right font-mono font-bold text-emerald-400">{formatPEN(p.saldo)}</td>
+                        <td className="py-3.5 px-4 text-right font-mono font-bold text-emerald-400">{esPadre ? '-' : formatPEN(p.saldo)}</td>
                         <td className="py-3.5 px-4 text-center">
                           <button
                             onClick={() => handleDelete(p.id, p.item)}
@@ -642,10 +687,31 @@ export default function PresupuestoTable({
                 ) : (
                   filtered.map((p) => {
                     const avance = p.porcentajeAvance || 0;
+                    const partesItem = p.item.split(/[\.\-\_]/).filter(Boolean);
+                    const nivel = Math.max(0, partesItem.length - 1);
+                    const esPadre = p.esTitulo || p.unidad === 'TITULO' || filtered.some((o) => o.item !== p.item && o.item.startsWith(p.item + '.'));
+
                     return (
-                      <tr key={p.id} className="hover:bg-slate-800/40 transition">
-                        <td className="py-3.5 px-4 font-mono font-bold text-purple-400 whitespace-nowrap">{p.item}</td>
-                        <td className="py-3.5 px-4 font-medium text-slate-100 max-w-sm">{p.descripcion}</td>
+                      <tr
+                        key={p.id}
+                        className={`transition ${
+                          esPadre
+                            ? 'bg-purple-950/40 font-bold border-t border-purple-900/60 text-purple-200'
+                            : 'hover:bg-slate-800/40 text-slate-300'
+                        }`}
+                      >
+                        <td className="py-3.5 px-4 font-mono font-bold whitespace-nowrap" style={{ paddingLeft: `${nivel * 1.5 + 1}rem` }}>
+                          <span className={esPadre ? 'text-purple-300' : 'text-purple-400'}>
+                            {esPadre && (nivel === 0 ? '📂 ' : '└─ ')}
+                            {!esPadre && nivel > 0 && '├─ '}
+                            {p.item}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 max-w-sm">
+                          <span className={esPadre ? 'text-purple-200 font-bold uppercase tracking-wide' : 'text-slate-100 font-medium'}>
+                            {p.descripcion}
+                          </span>
+                        </td>
                         <td className="py-3.5 px-4 text-center font-mono text-slate-300">
                           {p.duracionDias ? `${p.duracionDias} días` : '-'}
                         </td>
@@ -955,24 +1021,34 @@ export default function PresupuestoTable({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/60">
-                        {partidasDetectadas.slice(0, 80).map((p, idx) => (
-                          <tr key={idx} className={`hover:bg-slate-800/30 ${p.esTitulo ? 'bg-slate-950/60 text-amber-300 font-semibold' : 'text-slate-300'}`}>
-                            <td className="p-2 font-mono text-blue-400">{p.item}</td>
-                            <td className="p-2">{p.descripcion}</td>
-                            <td className="p-2">
-                              {p.esTitulo ? <span className="bg-amber-950/80 text-amber-400 px-1.5 py-0.5 rounded text-[10px]">TÍTULO</span> : (p.unidad || `${p.duracionDias || '-'} días`)}
-                            </td>
-                            <td className="p-2 text-right font-mono">{p.metrado || p.fechaInicioProg || '-'}</td>
-                            <td className="p-2 text-right font-mono">{p.precioUnitario || p.fechaFinProg || '-'}</td>
-                            <td className="p-2 text-right font-mono font-bold">
-                              {p.esTitulo ? (
-                                <span className="text-amber-400/80">{formatPEN(p.montoReferencialTitulo || 0)}</span>
-                              ) : (
-                                <span className="text-emerald-400">{formatPEN(p.parcialPresupuesto || 0)}</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
+                        {partidasDetectadas.slice(0, 80).map((p, idx) => {
+                          const partes = (p.item || '').split(/[\.\-\_]/).filter(Boolean);
+                          const nivel = Math.max(0, partes.length - 1);
+                          return (
+                            <tr key={idx} className={`hover:bg-slate-800/30 ${p.esTitulo ? 'bg-slate-950/80 text-amber-300 font-bold border-t border-slate-800' : 'text-slate-300'}`}>
+                              <td className="p-2 font-mono whitespace-nowrap" style={{ paddingLeft: `${nivel * 1 + 0.5}rem` }}>
+                                <span className={p.esTitulo ? 'text-amber-400' : 'text-blue-400'}>
+                                  {p.esTitulo && (nivel === 0 ? '📂 ' : '└─ ')}
+                                  {!p.esTitulo && nivel > 0 && '├─ '}
+                                  {p.item}
+                                </span>
+                              </td>
+                              <td className="p-2">{p.descripcion}</td>
+                              <td className="p-2">
+                                {p.esTitulo ? <span className="bg-amber-950/80 text-amber-400 px-1.5 py-0.5 rounded text-[10px]">TÍTULO</span> : (p.unidad || `${p.duracionDias || '-'} días`)}
+                              </td>
+                              <td className="p-2 text-right font-mono">{p.metrado || p.fechaInicioProg || '-'}</td>
+                              <td className="p-2 text-right font-mono">{p.precioUnitario || p.fechaFinProg || '-'}</td>
+                              <td className="p-2 text-right font-mono font-bold">
+                                {p.esTitulo ? (
+                                  <span className="text-amber-400/80">{formatPEN(p.montoReferencialTitulo || 0)}</span>
+                                ) : (
+                                  <span className="text-emerald-400">{formatPEN(p.parcialPresupuesto || 0)}</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
