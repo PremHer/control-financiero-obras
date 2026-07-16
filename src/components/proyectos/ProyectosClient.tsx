@@ -209,21 +209,62 @@ export default function ProyectosClient({
       const clean = line.trim();
       if (!clean) continue;
 
-      // 1. Regex S10 Estándar (Ej: 02.01 DESBROCE Y LIMPIEZA DE VEGETACIÓN m2 3,837.60 1.42 5,449.39)
-      const matchRegex = /^([\d\.\-\_]+)\s+(.+?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})\s+([\d\,\.]+)\s+([\d\,\.]+)\s+([\d\,\.]+)$/;
-      const match = clean.match(matchRegex);
+      // 1. Algoritmo Heurístico Universal S10 (Extraer ítem al inicio)
+      const matchCodigo = clean.match(/^([\d\.\-\_]+)\s+(.+)$/);
+      if (matchCodigo) {
+        const item = matchCodigo[1];
+        const resto = matchCodigo[2].trim();
 
-      if (match) {
-        const item = match[1];
-        const desc = match[2];
-        const und = match[3];
-        const met = Number(match[4].replace(/,/g, ''));
-        const pu = Number(match[5].replace(/,/g, ''));
-        const parc = Number(match[6].replace(/,/g, ''));
+        if (item.length <= 15 && !/^\d{4}$/.test(item)) {
+          // A) Extraer 3 números montos del final (Metrado, PU, Parcial)
+          const match3Nums = resto.match(/^(.*?)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)$/);
+          const match2Nums = resto.match(/^(.*?)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)$/);
+          const match1Num = resto.match(/^(.*?)\s+([\d\,\.\-]+)$/);
 
-        if (!isNaN(parc) && parc >= 0) {
-          parsed.push({ item, descripcion: desc, unidad: und, metrado: met, precioUnitario: pu, parcialPresupuesto: parc });
-          continue;
+          if (match3Nums) {
+            const textCentro = match3Nums[1].trim();
+            const met = Number(match3Nums[2].replace(/,/g, ''));
+            const pu = Number(match3Nums[3].replace(/,/g, ''));
+            const parc = Number(match3Nums[4].replace(/,/g, ''));
+
+            if (!isNaN(parc) && textCentro.length > 1) {
+              const matchUnd = textCentro.match(/^(.*?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})$/);
+              const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
+              const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
+
+              parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(met) ? 1 : met, precioUnitario: isNaN(pu) ? parc : pu, parcialPresupuesto: parc });
+              continue;
+            }
+          }
+
+          if (match2Nums) {
+            const textCentro = match2Nums[1].trim();
+            const n1 = Number(match2Nums[2].replace(/,/g, ''));
+            const n2 = Number(match2Nums[3].replace(/,/g, ''));
+
+            if (!isNaN(n2) && textCentro.length > 1) {
+              const matchUnd = textCentro.match(/^(.*?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})$/);
+              const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
+              const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
+
+              parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(n1) ? 1 : n1, precioUnitario: isNaN(n2) ? 0 : n2, parcialPresupuesto: isNaN(n2) ? (isNaN(n1) ? 0 : n1) : n1 * n2 });
+              continue;
+            }
+          }
+
+          if (match1Num) {
+            const textCentro = match1Num[1].trim();
+            const parc = Number(match1Num[2].replace(/,/g, ''));
+
+            if (!isNaN(parc) && textCentro.length > 2 && textCentro !== 'Parcial S/' && !textCentro.includes('Presupuesto')) {
+              const matchUnd = textCentro.match(/^(.*?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})$/);
+              const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
+              const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
+
+              parsed.push({ item, descripcion: desc, unidad: und, metrado: 1, precioUnitario: parc, parcialPresupuesto: parc });
+              continue;
+            }
+          }
         }
       }
 
@@ -250,41 +291,18 @@ export default function ProyectosClient({
         continue;
       }
 
-      // 3. Flex S10 (con o sin ID inicial, 2 o 3 montos)
-      const s10Flex = clean.match(/^(?:\d+\s+)?([\d\.\-\_]+)\s+(.+?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})\s+([\d\,\.]+)\s+([\d\,\.]+)(?:\s+([\d\,\.]+))?$/);
-      if (s10Flex) {
-        const item = s10Flex[1];
-        const desc = s10Flex[2];
-        const und = s10Flex[3];
-        const n1 = Number(s10Flex[4].replace(/,/g, ''));
-        const n2 = Number(s10Flex[5].replace(/,/g, ''));
-        const n3 = s10Flex[6] ? Number(s10Flex[6].replace(/,/g, '')) : n1 * n2;
-
-        if (!isNaN(n2) && desc.length > 2) {
-          parsed.push({
-            item,
-            descripcion: desc,
-            unidad: und,
-            metrado: s10Flex[6] ? n1 : 1,
-            precioUnitario: s10Flex[6] ? n2 : n1,
-            parcialPresupuesto: s10Flex[6] ? n3 : n2
-          });
-          continue;
-        }
-      }
-
-      // 4. Tab o múltiples espacios
+      // 3. Tab o múltiples espacios
       const tabs = clean.includes('\t') ? clean.split(/\t/) : clean.split(/\s{2,}/);
-      if (tabs.length >= 4) {
-        const item = tabs[0].trim();
-        const desc = tabs[1].trim();
-        const und = tabs[2]?.trim() || 'glb';
-        const met = Number((tabs[3] || '1').replace(/,/g, '')) || 1;
-        const pu = Number((tabs[4] || tabs[3] || '0').replace(/,/g, '')) || 0;
-        const parc = Number((tabs[5] || tabs[4] || tabs[3] || '0').replace(/,/g, '')) || met * pu;
+      if (tabs.length >= 4 && /^\d+([\.\-\_]\d+)*/.test(tabs[0].trim())) {
+        const itemTab = tabs[0].trim();
+        const descTab = tabs[1].trim();
+        const undTab = tabs[2]?.trim() || 'glb';
+        const metTab = Number((tabs[3] || '1').replace(/,/g, '')) || 1;
+        const puTab = Number((tabs[4] || tabs[3] || '0').replace(/,/g, '')) || 0;
+        const parcTab = Number((tabs[5] || tabs[4] || tabs[3] || '0').replace(/,/g, '')) || metTab * puTab;
 
-        if (desc.length > 2 && /^\d+([\.\-\_]\d+)*/.test(item)) {
-          parsed.push({ item, descripcion: desc, unidad: und, metrado: met, precioUnitario: pu, parcialPresupuesto: parc });
+        if (descTab.length > 2) {
+          parsed.push({ item: itemTab, descripcion: descTab, unidad: undTab, metrado: metTab, precioUnitario: puTab, parcialPresupuesto: parcTab });
           continue;
         }
       }
@@ -292,6 +310,7 @@ export default function ProyectosClient({
 
     if (parsed.length === 0) {
       setErrorImport('No se detectaron partidas en el documento. Verifica que las líneas contengan el código (Ej: 01.01 o 1.1.1), descripción y los montos o duración en días.');
+      setPartidasDetectadas([]);
     } else {
       setPartidasDetectadas(parsed);
       if (!nombre && parsed[0]?.descripcion) setNombre(`Proyecto: ${parsed[0].descripcion.slice(0, 40)}`);
