@@ -256,7 +256,33 @@ export default function PresupuestoTable({
       return;
     }
 
-    const lines = contentToParse.split(/\r?\n/);
+    const rawLines = contentToParse.split(/\r?\n/);
+    const lines: string[] = [];
+
+    // Pre-procesamiento: unir líneas divididas por saltos de página o descripciones largas en S10
+    for (const raw of rawLines) {
+      const clean = raw.trim();
+      if (!clean) continue;
+
+      // Si empieza por encabezados de página S10 o fechas, ignorar
+      if (/^S10\s+Página/i.test(clean) || /^Presupuesto\s+\d+/i.test(clean) || /^SALDO DE OBRA/i.test(clean) || /^Cliente\s+/i.test(clean) || /^Lugar\s+/i.test(clean) || /^Ítem\s+Descripción/i.test(clean)) {
+        continue;
+      }
+
+      // Si llegamos al pie del presupuesto (Costo Directo, Supervisión, Gastos Generales, Utilidad, IGV), DETENER la importación de partidas para tomar solo ejecución
+      if (/^(?:COSTO\s+DIRECTO|GASTOS\s+GENERALES|UTILIDAD|SUB\s*TOTAL|IGV|TOTAL\s+PRESUPUESTO|SUPERVISION|SUPERVISIÓN|GASTOS\s+DE\s+SUPERVISION|EXPEDIENTE|LIQUIDACION|LIQUIDACIÓN|SON:\s*)/i.test(clean)) {
+        break;
+      }
+
+      // Si empieza con un código jerárquico (Ej: "01", "01.01", "1.1"), es nueva fila
+      if (/^[\d\.\-\_]+\s+/.test(clean) && !/^\d{4}\s+/.test(clean)) {
+        lines.push(clean);
+      } else if (lines.length > 0) {
+        // Si no empieza con código, es la continuación de la descripción o montos de la línea anterior
+        lines[lines.length - 1] += ' ' + clean;
+      }
+    }
+
     const parsed: any[] = [];
 
     for (const line of lines) {
@@ -264,19 +290,15 @@ export default function PresupuestoTable({
       if (!clean) continue;
 
       if (importTab === 'PDF_PRESUPUESTO') {
-        // ALGORITMO HEURÍSTICO UNIVERSAL PARA S10 / PRESUPUESTOS
-        // 1. Extraer código inicial (Ej: "01", "01.01", "02.01.04", "1.1")
         const matchCodigo = clean.match(/^([\d\.\-\_]+)\s+(.+)$/);
         if (!matchCodigo) continue;
 
         const item = matchCodigo[1];
         let resto = matchCodigo[2].trim();
 
-        // Si el ítem es solo números largos o fecha, saltar
         if (item.length > 15 || /^\d{4}$/.test(item)) continue;
 
-        // 2. Extraer números montos del final de la cadena (3 números: Metrado, PU, Parcial)
-        // O 2 números, o 1 número
+        // Intentar capturar 3 números al final (Metrado, PU, Parcial)
         const match3Nums = resto.match(/^(.*?)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)$/);
         const match2Nums = resto.match(/^(.*?)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)$/);
         const match1Num = resto.match(/^(.*?)\s+([\d\,\.\-]+)$/);
@@ -288,12 +310,12 @@ export default function PresupuestoTable({
           const parc = Number(match3Nums[4].replace(/,/g, ''));
 
           if (!isNaN(parc) && textCentro.length > 1) {
-            // Separar unidad del final del texto (ej: "DESBROCE Y LIMPIEZA m2" -> desc="DESBROCE...", und="m2")
             const matchUnd = textCentro.match(/^(.*?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})$/);
             const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
             const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
 
-            parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(met) ? 1 : met, precioUnitario: isNaN(pu) ? parc : pu, parcialPresupuesto: parc });
+            // Es partida ejecutable de Costo Directo
+            parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(met) ? 1 : met, precioUnitario: isNaN(pu) ? parc : pu, parcialPresupuesto: parc, esTitulo: false });
             continue;
           }
         }
@@ -308,7 +330,7 @@ export default function PresupuestoTable({
             const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
             const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
 
-            parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(n1) ? 1 : n1, precioUnitario: isNaN(n2) ? 0 : n2, parcialPresupuesto: isNaN(n2) ? (isNaN(n1) ? 0 : n1) : n1 * n2 });
+            parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(n1) ? 1 : n1, precioUnitario: isNaN(n2) ? 0 : n2, parcialPresupuesto: isNaN(n2) ? (isNaN(n1) ? 0 : n1) : n1 * n2, esTitulo: false });
             continue;
           }
         }
@@ -320,14 +342,16 @@ export default function PresupuestoTable({
           if (!isNaN(parc) && textCentro.length > 2 && textCentro !== 'Parcial S/' && !textCentro.includes('Presupuesto')) {
             const matchUnd = textCentro.match(/^(.*?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})$/);
             const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
-            const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
+            const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'TITULO';
 
-            parsed.push({ item, descripcion: desc, unidad: und, metrado: 1, precioUnitario: parc, parcialPresupuesto: parc });
+            // Si es un título jerárquico puro o cabecera con 1 solo monto al final (ej: "01 OBRAS PROVISIONALES 11,021.78")
+            // Lo identificamos con esTitulo: true y no suma al Costo Directo total para evitar duplicar montos
+            const esTit = und === 'TITULO' || !item.includes('.');
+            parsed.push({ item, descripcion: desc, unidad: esTit ? 'TITULO' : und, metrado: esTit ? '-' : 1, precioUnitario: esTit ? '-' : parc, parcialPresupuesto: esTit ? 0 : parc, montoReferencialTitulo: esTit ? parc : undefined, esTitulo: esTit });
             continue;
           }
         }
 
-        // Si se separó por tabs en Excel o pegado
         const tabs = clean.includes('\t') ? clean.split(/\t/) : clean.split(/\s{2,}/);
         if (tabs.length >= 4 && /^\d+([\.\-\_]\d+)*/.test(tabs[0].trim())) {
           const itemTab = tabs[0].trim();
@@ -338,12 +362,11 @@ export default function PresupuestoTable({
           const parcTab = Number((tabs[5] || tabs[4] || tabs[3] || '0').replace(/,/g, '')) || metTab * puTab;
 
           if (descTab.length > 2) {
-            parsed.push({ item: itemTab, descripcion: descTab, unidad: undTab, metrado: metTab, precioUnitario: puTab, parcialPresupuesto: parcTab });
+            parsed.push({ item: itemTab, descripcion: descTab, unidad: undTab, metrado: metTab, precioUnitario: puTab, parcialPresupuesto: parcTab, esTitulo: false });
             continue;
           }
         }
       } else if (importTab === 'PDF_CRONOGRAMA') {
-        // 1. Regex Gantt/MS Project (soporta columna ID inicial opcional como "3 1.1.1 CARTEL DE OBRA ... 1 día")
         const matchGantt = clean.match(/^(?:\d+\s+)?([\d\.\-\_]+)\s+(.+?)\s+(\d+)\s*(?:días|dias|día|dia|d)\b(?:\s+([\d\/\-\.]+)\s+([\d\/\-\.]+))?/i);
         if (matchGantt) {
           const item = matchGantt[1];
@@ -361,7 +384,8 @@ export default function PresupuestoTable({
             parcialPresupuesto: 0,
             duracionDias: duracion,
             fechaInicioProg: fIni,
-            fechaFinProg: fFin
+            fechaFinProg: fFin,
+            esTitulo: false
           });
           continue;
         }
@@ -376,8 +400,23 @@ export default function PresupuestoTable({
           }
           const dur = Number(String(tabs[tabs.length - 1] || '').replace(/\D/g, '')) || 10;
           if (/^\d+([\.\-\_]\d+)*/.test(item) && desc.length > 2) {
-            parsed.push({ item, descripcion: desc, unidad: 'glb', metrado: 1, precioUnitario: 0, parcialPresupuesto: 0, duracionDias: dur });
+            parsed.push({ item, descripcion: desc, unidad: 'glb', metrado: 1, precioUnitario: 0, parcialPresupuesto: 0, duracionDias: dur, esTitulo: false });
           }
+        }
+      }
+    }
+
+    // Post-proceso: identificar qué ítems son padres (ej: "01", "01.01" si existe "01.01.01") para no duplicar sumas
+    const itemsSet = new Set(parsed.map(p => p.item));
+    for (const p of parsed) {
+      const tieneHijos = parsed.some(otro => otro.item !== p.item && otro.item.startsWith(p.item + '.'));
+      if (tieneHijos || p.esTitulo) {
+        p.esTitulo = true;
+        if (p.parcialPresupuesto > 0) {
+          p.montoReferencialTitulo = p.parcialPresupuesto;
+          p.parcialPresupuesto = 0; // Excluir de la suma del Costo Directo
+          p.metrado = '-';
+          p.precioUnitario = '-';
         }
       }
     }
@@ -897,31 +936,41 @@ export default function PresupuestoTable({
 
               {partidasDetectadas.length > 0 && (
                 <div className="space-y-2 pt-2">
-                  <div className="flex justify-between items-center text-xs font-bold text-emerald-400">
-                    <span>✅ {partidasDetectadas.length} Partidas Detectadas y Listas</span>
-                    <span>Total: {formatPEN(partidasDetectadas.reduce((a, b) => a + (b.parcialPresupuesto || 0), 0))}</span>
+                  <div className="flex justify-between items-center text-xs font-bold text-emerald-400 bg-slate-950/80 p-2.5 rounded-xl border border-slate-800">
+                    <span>✅ {partidasDetectadas.length} Ítems Detectados ({partidasDetectadas.filter(p => !p.esTitulo).length} Partidas de Costo Directo)</span>
+                    <span className="text-sm bg-emerald-950 px-3 py-1 rounded-lg border border-emerald-800 text-emerald-300">
+                      Costo Directo Total: {formatPEN(partidasDetectadas.reduce((a, b) => a + (b.parcialPresupuesto || 0), 0))}
+                    </span>
                   </div>
-                  <div className="max-h-56 overflow-y-auto border border-slate-800 rounded-xl">
+                  <div className="max-h-64 overflow-y-auto border border-slate-800 rounded-xl">
                     <table className="w-full text-left text-[11px]">
-                      <thead className="bg-slate-950 text-slate-400 uppercase">
+                      <thead className="bg-slate-950 text-slate-400 uppercase sticky top-0 z-10">
                         <tr>
                           <th className="p-2">Ítem</th>
                           <th className="p-2">Descripción</th>
                           <th className="p-2">Und / Duración</th>
                           <th className="p-2 text-right">Metrado / F.Inicio</th>
                           <th className="p-2 text-right">P.U. / F.Fin</th>
-                          <th className="p-2 text-right">Parcial</th>
+                          <th className="p-2 text-right">Parcial / Costo</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/60">
-                        {partidasDetectadas.slice(0, 20).map((p, idx) => (
-                          <tr key={idx} className="hover:bg-slate-800/30 text-slate-300">
+                        {partidasDetectadas.slice(0, 80).map((p, idx) => (
+                          <tr key={idx} className={`hover:bg-slate-800/30 ${p.esTitulo ? 'bg-slate-950/60 text-amber-300 font-semibold' : 'text-slate-300'}`}>
                             <td className="p-2 font-mono text-blue-400">{p.item}</td>
                             <td className="p-2">{p.descripcion}</td>
-                            <td className="p-2">{p.unidad || `${p.duracionDias || '-'} días`}</td>
+                            <td className="p-2">
+                              {p.esTitulo ? <span className="bg-amber-950/80 text-amber-400 px-1.5 py-0.5 rounded text-[10px]">TÍTULO</span> : (p.unidad || `${p.duracionDias || '-'} días`)}
+                            </td>
                             <td className="p-2 text-right font-mono">{p.metrado || p.fechaInicioProg || '-'}</td>
                             <td className="p-2 text-right font-mono">{p.precioUnitario || p.fechaFinProg || '-'}</td>
-                            <td className="p-2 text-right font-mono font-bold text-emerald-400">{formatPEN(p.parcialPresupuesto || 0)}</td>
+                            <td className="p-2 text-right font-mono font-bold">
+                              {p.esTitulo ? (
+                                <span className="text-amber-400/80">{formatPEN(p.montoReferencialTitulo || 0)}</span>
+                              ) : (
+                                <span className="text-emerald-400">{formatPEN(p.parcialPresupuesto || 0)}</span>
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </tbody>

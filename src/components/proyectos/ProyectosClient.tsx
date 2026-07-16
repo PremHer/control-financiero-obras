@@ -202,7 +202,30 @@ export default function ProyectosClient({
       return;
     }
 
-    const lines = contentToParse.split(/\r?\n/);
+    const rawLines = contentToParse.split(/\r?\n/);
+    const lines: string[] = [];
+
+    // Pre-procesamiento: unir líneas divididas por saltos de página o descripciones largas en S10
+    for (const raw of rawLines) {
+      const clean = raw.trim();
+      if (!clean) continue;
+
+      if (/^S10\s+Página/i.test(clean) || /^Presupuesto\s+\d+/i.test(clean) || /^SALDO DE OBRA/i.test(clean) || /^Cliente\s+/i.test(clean) || /^Lugar\s+/i.test(clean) || /^Ítem\s+Descripción/i.test(clean)) {
+        continue;
+      }
+
+      // Detener en el pie de presupuesto / supervisión para importar estrictamente el COSTO DIRECTO
+      if (/^(?:COSTO\s+DIRECTO|GASTOS\s+GENERALES|UTILIDAD|SUB\s*TOTAL|IGV|TOTAL\s+PRESUPUESTO|SUPERVISION|SUPERVISIÓN|GASTOS\s+DE\s+SUPERVISION|EXPEDIENTE|LIQUIDACION|LIQUIDACIÓN|SON:\s*)/i.test(clean)) {
+        break;
+      }
+
+      if (/^[\d\.\-\_]+\s+/.test(clean) && !/^\d{4}\s+/.test(clean)) {
+        lines.push(clean);
+      } else if (lines.length > 0) {
+        lines[lines.length - 1] += ' ' + clean;
+      }
+    }
+
     const parsed: any[] = [];
 
     for (const line of lines) {
@@ -232,7 +255,7 @@ export default function ProyectosClient({
               const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
               const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
 
-              parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(met) ? 1 : met, precioUnitario: isNaN(pu) ? parc : pu, parcialPresupuesto: parc });
+              parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(met) ? 1 : met, precioUnitario: isNaN(pu) ? parc : pu, parcialPresupuesto: parc, esTitulo: false });
               continue;
             }
           }
@@ -247,7 +270,7 @@ export default function ProyectosClient({
               const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
               const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
 
-              parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(n1) ? 1 : n1, precioUnitario: isNaN(n2) ? 0 : n2, parcialPresupuesto: isNaN(n2) ? (isNaN(n1) ? 0 : n1) : n1 * n2 });
+              parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(n1) ? 1 : n1, precioUnitario: isNaN(n2) ? 0 : n2, parcialPresupuesto: isNaN(n2) ? (isNaN(n1) ? 0 : n1) : n1 * n2, esTitulo: false });
               continue;
             }
           }
@@ -259,9 +282,10 @@ export default function ProyectosClient({
             if (!isNaN(parc) && textCentro.length > 2 && textCentro !== 'Parcial S/' && !textCentro.includes('Presupuesto')) {
               const matchUnd = textCentro.match(/^(.*?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})$/);
               const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
-              const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
+              const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'TITULO';
 
-              parsed.push({ item, descripcion: desc, unidad: und, metrado: 1, precioUnitario: parc, parcialPresupuesto: parc });
+              const esTit = und === 'TITULO' || !item.includes('.');
+              parsed.push({ item, descripcion: desc, unidad: esTit ? 'TITULO' : und, metrado: esTit ? '-' : 1, precioUnitario: esTit ? '-' : parc, parcialPresupuesto: esTit ? 0 : parc, montoReferencialTitulo: esTit ? parc : undefined, esTitulo: esTit });
               continue;
             }
           }
@@ -286,7 +310,8 @@ export default function ProyectosClient({
           parcialPresupuesto: 0,
           duracionDias: duracion,
           fechaInicioProg: fIni,
-          fechaFinProg: fFin
+          fechaFinProg: fFin,
+          esTitulo: false
         });
         continue;
       }
@@ -302,14 +327,28 @@ export default function ProyectosClient({
         const parcTab = Number((tabs[5] || tabs[4] || tabs[3] || '0').replace(/,/g, '')) || metTab * puTab;
 
         if (descTab.length > 2) {
-          parsed.push({ item: itemTab, descripcion: descTab, unidad: undTab, metrado: metTab, precioUnitario: puTab, parcialPresupuesto: parcTab });
+          parsed.push({ item: itemTab, descripcion: descTab, unidad: undTab, metrado: metTab, precioUnitario: puTab, parcialPresupuesto: parcTab, esTitulo: false });
           continue;
         }
       }
     }
 
+    // Post-proceso para diferenciar títulos y evitar duplicación en suma del Costo Directo
+    for (const p of parsed) {
+      const tieneHijos = parsed.some(otro => otro.item !== p.item && otro.item.startsWith(p.item + '.'));
+      if (tieneHijos || p.esTitulo) {
+        p.esTitulo = true;
+        if (p.parcialPresupuesto > 0) {
+          p.montoReferencialTitulo = p.parcialPresupuesto;
+          p.parcialPresupuesto = 0;
+          p.metrado = '-';
+          p.precioUnitario = '-';
+        }
+      }
+    }
+
     if (parsed.length === 0) {
-      setErrorImport('No se detectaron partidas en el documento. Verifica que las líneas contengan el código (Ej: 01.01 o 1.1.1), descripción y los montos o duración en días.');
+      setErrorImport('No se detectaron partidas en el documento. Verifica que las filas del PDF o texto extraído contengan código, descripción y montos/duración.');
       setPartidasDetectadas([]);
     } else {
       setPartidasDetectadas(parsed);
@@ -606,31 +645,41 @@ export default function ProyectosClient({
 
                   {partidasDetectadas.length > 0 && (
                     <div className="space-y-2 pt-2">
-                      <div className="flex justify-between items-center text-xs font-bold text-emerald-400">
-                        <span className="flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" /> {partidasDetectadas.length} Partidas Detectadas</span>
-                        <span>Suma Directa: {formatPEN(partidasDetectadas.reduce((a, b) => a + (b.parcialPresupuesto || 0), 0))}</span>
+                      <div className="flex justify-between items-center text-xs font-bold text-emerald-400 bg-slate-950/80 p-2.5 rounded-xl border border-slate-800">
+                        <span className="flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" /> {partidasDetectadas.length} Ítems ({partidasDetectadas.filter(p => !p.esTitulo).length} Partidas CD)</span>
+                        <span className="text-sm bg-emerald-950 px-3 py-1 rounded-lg border border-emerald-800 text-emerald-300">
+                          Costo Directo Total: {formatPEN(partidasDetectadas.reduce((a, b) => a + (b.parcialPresupuesto || 0), 0))}
+                        </span>
                       </div>
-                      <div className="max-h-48 overflow-y-auto border border-slate-800 rounded-xl">
+                      <div className="max-h-56 overflow-y-auto border border-slate-800 rounded-xl">
                         <table className="w-full text-left text-[11px]">
-                          <thead className="bg-slate-950 text-slate-400 uppercase">
+                          <thead className="bg-slate-950 text-slate-400 uppercase sticky top-0 z-10">
                             <tr>
                               <th className="p-2">Ítem</th>
                               <th className="p-2">Descripción</th>
                               <th className="p-2">Und</th>
                               <th className="p-2 text-right">Metrado</th>
                               <th className="p-2 text-right">P.U.</th>
-                              <th className="p-2 text-right">Parcial</th>
+                              <th className="p-2 text-right">Parcial / Costo</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-800/60">
-                            {partidasDetectadas.slice(0, 15).map((p, idx) => (
-                              <tr key={idx} className="hover:bg-slate-800/30 text-slate-300">
+                            {partidasDetectadas.slice(0, 80).map((p, idx) => (
+                              <tr key={idx} className={`hover:bg-slate-800/30 ${p.esTitulo ? 'bg-slate-950/60 text-amber-300 font-semibold' : 'text-slate-300'}`}>
                                 <td className="p-2 font-mono text-blue-400">{p.item}</td>
                                 <td className="p-2">{p.descripcion}</td>
-                                <td className="p-2">{p.unidad}</td>
+                                <td className="p-2">
+                                  {p.esTitulo ? <span className="bg-amber-950/80 text-amber-400 px-1.5 py-0.5 rounded text-[10px]">TÍTULO</span> : p.unidad}
+                                </td>
                                 <td className="p-2 text-right font-mono">{p.metrado}</td>
                                 <td className="p-2 text-right font-mono">{p.precioUnitario}</td>
-                                <td className="p-2 text-right font-mono font-bold text-emerald-400">{formatPEN(p.parcialPresupuesto)}</td>
+                                <td className="p-2 text-right font-mono font-bold">
+                                  {p.esTitulo ? (
+                                    <span className="text-amber-400/80">{formatPEN(p.montoReferencialTitulo || 0)}</span>
+                                  ) : (
+                                    <span className="text-emerald-400">{formatPEN(p.parcialPresupuesto || 0)}</span>
+                                  )}
+                                </td>
                               </tr>
                             ))}
                           </tbody>
