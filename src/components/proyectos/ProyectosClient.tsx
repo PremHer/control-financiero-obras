@@ -215,23 +215,34 @@ export default function ProyectosClient({
       return true;
     });
 
-    // Normalizador S10 para ordenar líneas donde pdf-parse extrajo la descripción primero ("DEMOLICIÓN... m3 02.06 7.56 27.76 209.87")
-    let fullTextS10 = s10RawFiltered.join(' \n ');
-    fullTextS10 = fullTextS10.replace(
-      /([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9\/\%\-\_\(\)\,\.\+\:\;\s]{2,}?)\s+([a-zA-Z0-9\/\%\-\_]{1,6})\s+(\b(?:0[1-9]|[1-9]\d*)(?:\.\d{1,3})+\b)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)/g,
-      '\n$3 $1 $2 $4 $5 $6\n'
-    );
-    // Asegurar ruptura de línea antes de cada código jerárquico o título padre de S10
-    fullTextS10 = fullTextS10.replace(/\s+(?=(?:0[1-9]|[1-9]\d*)(?:\.\d{1,3})+\s+[A-ZÁÉÍÓÚÑa-záéíóúñ])/g, '\n');
-    fullTextS10 = fullTextS10.replace(/\s+(?=(?:0[1-9]|[1-9]\d*)\s+[A-ZÁÉÍÓÚÑ]{3,})/g, '\n');
+    // ========================================================================
+    // SEGMENTADOR ROBUSTO PARA PDF S10
+    // Los códigos S10 usan exactamente 2 dígitos por segmento: 01, 01.01, 03.02.01
+    // Estrategia: unir todo el texto, luego insertar saltos de línea ANTES de cada
+    // código S10 usando el patrón [dígito_fin_monto] [código] [letra_descripción]
+    // ========================================================================
+    let fullText = s10RawFiltered.join(' ');
 
-    const s10NormalizedLines = fullTextS10.split(/\r?\n/);
+    // 1) Insertar \n antes de sub-ítems (códigos CON punto: 01.01, 02.06, 03.01.01)
+    fullText = fullText.replace(
+      /(\d)\s+(\d{2}(?:\.\d{2}){1,5})\s+([A-ZÁÉÍÓÚÑa-záéíóúñ])/g,
+      '$1\n$2 $3'
+    );
+
+    // 2) Insertar \n antes de ítems padre (códigos SIN punto: 01, 02, 03)
+    fullText = fullText.replace(
+      /(\d)\s+(\d{2})\s+([A-ZÁÉÍÓÚÑ]{2})/g,
+      '$1\n$2 $3'
+    );
+
+    // Dividir en líneas individuales y filtrar
+    const segments = fullText.split('\n');
     const lines: string[] = [];
 
-    for (const raw of s10NormalizedLines) {
-      const clean = raw.trim();
+    for (const seg of segments) {
+      const clean = seg.trim();
       if (!clean) continue;
-      if (/^(?:0[1-9]|[1-9]\d*)(?:\.\d{1,3})*\s+/.test(clean) && !/^\d{4,}\s+/.test(clean)) {
+      if (/^\d{2}(?:\.\d{2}){0,5}\s+/.test(clean)) {
         lines.push(clean);
       } else if (lines.length > 0) {
         lines[lines.length - 1] += ' ' + clean;
@@ -244,67 +255,48 @@ export default function ProyectosClient({
       const clean = line.trim();
       if (!clean) continue;
 
-      // 1. Algoritmo Heurístico Universal S10 (Extraer ítem al inicio)
-      const matchCodigo = clean.match(/^([\d\.\-\_]+)\s+(.+)$/);
+      const matchCodigo = clean.match(/^(\d{2}(?:\.\d{2}){0,5})\s+(.+)$/);
       if (matchCodigo) {
         const item = matchCodigo[1].trim();
         const resto = matchCodigo[2].trim();
 
-        if (item.length <= 15 && !/^\d{4,}$/.test(item)) {
-          // A) Extraer 3 números montos del final (Metrado, PU, Parcial)
-          const match3Nums = resto.match(/^(.*?)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)$/);
-          const match2Nums = resto.match(/^(.*?)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)$/);
-          const match1Num = resto.match(/^(.*?)\s+([\d\,\.\-]+)$/);
+        // Intentar extraer 3 números del final: [metrado] [PU] [parcial]
+        const match3Nums = resto.match(/^(.*?)\s+([\d\,\.]+)\s+([\d\,\.]+)\s+([\d\,\.]+)$/);
+        const match1Num = resto.match(/^(.*?)\s+([\d\,\.]+)$/);
 
-          if (match3Nums) {
-            const textCentro = match3Nums[1].trim();
-            const met = Number(match3Nums[2].replace(/,/g, ''));
-            const pu = Number(match3Nums[3].replace(/,/g, ''));
-            const parc = Number(match3Nums[4].replace(/,/g, ''));
+        if (match3Nums) {
+          const textCentro = match3Nums[1].trim();
+          const met = Number(match3Nums[2].replace(/,/g, ''));
+          const pu = Number(match3Nums[3].replace(/,/g, ''));
+          const parc = Number(match3Nums[4].replace(/,/g, ''));
 
-            if (!isNaN(parc) && textCentro.length > 1) {
-              const matchUnd = textCentro.match(/^(.*?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})$/);
-              const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
-              const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
+          if (!isNaN(parc) && textCentro.length > 1) {
+            const matchUnd = textCentro.match(/^(.*?)\s+([a-zA-Z0-9\/\%]{1,8})$/);
+            const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
+            const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
 
-              parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(met) ? 1 : met, precioUnitario: isNaN(pu) ? parc : pu, parcialPresupuesto: parc, esTitulo: false });
-              continue;
+            parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(met) ? 1 : met, precioUnitario: isNaN(pu) ? parc : pu, parcialPresupuesto: parc, esTitulo: false });
+            continue;
+          }
+        }
+
+        if (match1Num) {
+          const textCentro = match1Num[1].trim();
+          const parc = Number(match1Num[2].replace(/,/g, ''));
+
+          if (!isNaN(parc) && textCentro.length > 2 && !/^(Parcial|Precio|Und|Metrado|Descripción)/i.test(textCentro)) {
+            const esTit = !item.includes('.') || /^[A-ZÁÉÍÓÚÑ\s]{4,}$/.test(textCentro);
+            if (esTit) {
+              parsed.push({ item, descripcion: textCentro, unidad: 'TITULO', metrado: '-', precioUnitario: '-', parcialPresupuesto: 0, montoReferencialTitulo: parc, esTitulo: true });
+            } else {
+              parsed.push({ item, descripcion: textCentro, unidad: 'glb', metrado: 1, precioUnitario: parc, parcialPresupuesto: parc, esTitulo: false });
             }
+            continue;
           }
+        }
 
-          if (match2Nums) {
-            const textCentro = match2Nums[1].trim();
-            const n1 = Number(match2Nums[2].replace(/,/g, ''));
-            const n2 = Number(match2Nums[3].replace(/,/g, ''));
-
-            if (!isNaN(n2) && textCentro.length > 1) {
-              const matchUnd = textCentro.match(/^(.*?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})$/);
-              const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
-              const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
-
-              parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(n1) ? 1 : n1, precioUnitario: isNaN(n2) ? 0 : n2, parcialPresupuesto: isNaN(n2) ? (isNaN(n1) ? 0 : n1) : n1 * n2, esTitulo: false });
-              continue;
-            }
-          }
-
-          if (match1Num) {
-            const textCentro = match1Num[1].trim();
-            const parc = Number(match1Num[2].replace(/,/g, ''));
-
-            if (!isNaN(parc) && textCentro.length > 2 && textCentro !== 'Parcial S/' && !textCentro.includes('Presupuesto')) {
-              const matchUnd = textCentro.match(/^(.*?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})$/);
-              const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
-              const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'TITULO';
-
-              const esTit = und === 'TITULO' || !item.includes('.');
-              parsed.push({ item, descripcion: desc, unidad: esTit ? 'TITULO' : und, metrado: esTit ? '-' : 1, precioUnitario: esTit ? '-' : parc, parcialPresupuesto: esTit ? 0 : parc, montoReferencialTitulo: esTit ? parc : undefined, esTitulo: esTit });
-              continue;
-            }
-          }
-
-          if (resto.length > 2 && !resto.includes('Descripción')) {
-            parsed.push({ item, descripcion: resto, unidad: 'TITULO', metrado: '-', precioUnitario: '-', parcialPresupuesto: 0, esTitulo: true });
-          }
+        if (resto.length > 2 && !/^(Descripción|Und|Metrado|Precio|Parcial)/i.test(resto)) {
+          parsed.push({ item, descripcion: resto, unidad: 'TITULO', metrado: '-', precioUnitario: '-', parcialPresupuesto: 0, esTitulo: true });
         }
       }
 
