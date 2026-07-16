@@ -278,37 +278,49 @@ export default function PresupuestoTable({
     const rawLines = contentToParse.split(/\r?\n/);
     const lines: string[] = [];
 
-    // Pre-procesamiento: unir líneas divididas por saltos de página o descripciones largas en S10
-    for (const raw of rawLines) {
+    // Pre-procesamiento y limpieza de cabeceras/resúmenes
+    const s10RawFiltered = rawLines.filter(raw => {
       const clean = raw.trim();
-      if (!clean) continue;
-
-      // Si empieza por encabezados de página S10, fechas, títulos de cliente o reportes, ignorar
+      if (!clean) return false;
       if (/^S10\s+Página/i.test(clean) || /^Presupuesto\s+\d+/i.test(clean) || /^SALDO DE OBRA/i.test(clean) || /^Cliente\s+/i.test(clean) || /^Lugar\s+/i.test(clean) || /^Ítem\s+Descripción/i.test(clean) || /^Costo\s+al\s+/i.test(clean)) {
-        continue;
+        return false;
       }
-
-      // Si es una línea de pie o resumen final de página S10 (Costo Directo, Supervisión, IGV, Son:), omitirla para no romper el parsing de las siguientes páginas
       if (/^(?:COSTO\s+DIRECTO|GASTOS\s+GENERALES|UTILIDAD|SUB\s*TOTAL|IGV|TOTAL\s+PRESUPUESTO|SUPERVISION|SUPERVISIÓN|GASTOS\s+DE\s+SUPERVISION|EXPEDIENTE|LIQUIDACION|LIQUIDACIÓN|SON:\s*)/i.test(clean)) {
-        continue;
+        return false;
       }
-
-      // Si empieza con un código jerárquico (Ej: "01", "01.01", "1.1"), es nueva fila de partida
-      if (/^[\d\.\-\_]+\s+/.test(clean) && !/^\d{4,}\s+/.test(clean)) {
-        lines.push(clean);
-      } else if (lines.length > 0) {
-        // Si no empieza con código y estamos dentro de partidas, es la continuación de la descripción anterior
-        lines[lines.length - 1] += ' ' + clean;
-      }
-    }
+      return true;
+    });
 
     const parsed: any[] = [];
 
-    for (const line of lines) {
-      const clean = line.trim();
-      if (!clean) continue;
+    if (tabActual === 'PDF_PRESUPUESTO') {
+      // Normalizador inteligente para S10:
+      // Convierte partidas que pdf-parse extrajo en orden invertido o pegadas (Ej: "DEMOLICIÓN... m3 02.06 7.56 27.76 209.87")
+      // a líneas limpias en orden estándar: "02.06 DEMOLICIÓN... m3 7.56 27.76 209.87"
+      let fullTextS10 = s10RawFiltered.join(' \n ');
+      fullTextS10 = fullTextS10.replace(
+        /([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9\/\%\-\_\(\)\,\.\+\:\;\s]{2,}?)\s+([a-zA-Z0-9\/\%\-\_]{1,6})\s+(\b\d{2}(?:\.\d{2}){1,4}\b)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)/g,
+        '\n$3 $1 $2 $4 $5 $6\n'
+      );
+      // Asegurar que cada código de partida o título empiece en su propia línea
+      fullTextS10 = fullTextS10.replace(/\s+(\b\d{2}(?:\.\d{2}){0,4}\b\s+[a-zA-ZáéíóúÁÉÍÓÚñÑ])/g, '\n$1');
 
-      if (tabActual === 'PDF_PRESUPUESTO') {
+      const s10NormalizedLines = fullTextS10.split(/\r?\n/);
+      const lines: string[] = [];
+
+      for (const raw of s10NormalizedLines) {
+        const clean = raw.trim();
+        if (!clean) continue;
+        if (/^[\d\.\-\_]+\s+/.test(clean) && !/^\d{4,}\s+/.test(clean)) {
+          lines.push(clean);
+        } else if (lines.length > 0) {
+          lines[lines.length - 1] += ' ' + clean;
+        }
+      }
+
+      for (const line of lines) {
+        const clean = line.trim();
+        if (!clean) continue;
         const matchCodigo = clean.match(/^([\d\.\-\_]+)\s+(.+)$/);
         if (!matchCodigo) continue;
 
@@ -317,7 +329,6 @@ export default function PresupuestoTable({
 
         if (item.length > 15 || /^\d{4,}$/.test(item)) continue;
 
-        // Intentar capturar 3 números al final (Metrado, PU, Parcial)
         const match3Nums = resto.match(/^(.*?)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)$/);
         const match2Nums = resto.match(/^(.*?)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)$/);
         const match1Num = resto.match(/^(.*?)\s+([\d\,\.\-]+)$/);
@@ -333,7 +344,6 @@ export default function PresupuestoTable({
             const desc = matchUnd && matchUnd[1].length > 2 ? matchUnd[1].trim() : textCentro;
             const und = matchUnd && matchUnd[1].length > 2 ? matchUnd[2].trim() : 'glb';
 
-            // Es partida ejecutable de Costo Directo
             parsed.push({ item, descripcion: desc, unidad: und, metrado: isNaN(met) ? 1 : met, precioUnitario: isNaN(pu) ? parc : pu, parcialPresupuesto: parc, esTitulo: false });
             continue;
           }
@@ -369,11 +379,23 @@ export default function PresupuestoTable({
           }
         }
 
-        // Si no coincidió con números al final pero tiene código de ítem y descripción (Ej: "01 OBRAS PROVISIONALES")
         if (resto.length > 2 && !resto.includes('Descripción')) {
           parsed.push({ item, descripcion: resto, unidad: 'TITULO', metrado: '-', precioUnitario: '-', parcialPresupuesto: 0, esTitulo: true });
         }
-      } else if (tabActual === 'PDF_CRONOGRAMA') {
+      }
+    } else if (tabActual === 'PDF_CRONOGRAMA') {
+      const lines: string[] = [];
+      for (const raw of s10RawFiltered) {
+        const clean = raw.trim();
+        if (/^[\d\.\-\_]+\s+/.test(clean) && !/^\d{4,}\s+/.test(clean)) {
+          lines.push(clean);
+        } else if (lines.length > 0) {
+          lines[lines.length - 1] += ' ' + clean;
+        }
+      }
+      for (const line of lines) {
+        const clean = line.trim();
+        if (!clean) continue;
         const matchGantt = clean.match(/^(?:\d+\s+)?([\d\.\-\_]+)\s+(.+?)\s+(\d+)\s*(?:días|dias|día|dia|d)\b(?:\s+([\d\/\-\.]+)\s+([\d\/\-\.]+))?/i);
         if (matchGantt) {
           const item = matchGantt[1];

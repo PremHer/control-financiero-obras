@@ -184,21 +184,43 @@ export async function agregarPartidasAProyecto(
 ) {
   if (!partidas || partidas.length === 0) return { success: false, message: 'No hay partidas para importar' };
 
-  await prisma.partida.createMany({
-    data: partidas.map((p) => ({
-      proyectoId,
-      item: p.item || '01',
-      descripcion: p.descripcion || 'Sin descripción',
-      unidad: p.unidad || 'glb',
-      metrado: Number(p.metrado) || 1,
-      precioUnitario: Number(p.precioUnitario) || 0,
-      parcialPresupuesto: Number(p.parcialPresupuesto) || 0,
-      fechaInicioProg: p.fechaInicioProg ? new Date(p.fechaInicioProg) : null,
-      fechaFinProg: p.fechaFinProg ? new Date(p.fechaFinProg) : null,
-      duracionDias: p.duracionDias ? Number(p.duracionDias) : null,
-      porcentajeAvance: p.porcentajeAvance ? Number(p.porcentajeAvance) : 0
-    }))
-  });
+  await prisma.$transaction(
+    partidas.map((p) => {
+      const itemCode = (p.item || '01').trim();
+      return prisma.partida.upsert({
+        where: {
+          proyectoId_item: {
+            proyectoId,
+            item: itemCode
+          }
+        },
+        update: {
+          descripcion: p.descripcion || 'Sin descripción',
+          unidad: p.unidad || 'glb',
+          metrado: Number(p.metrado) || 1,
+          precioUnitario: Number(p.precioUnitario) || 0,
+          parcialPresupuesto: Number(p.parcialPresupuesto) || 0,
+          ...(p.fechaInicioProg ? { fechaInicioProg: new Date(p.fechaInicioProg) } : {}),
+          ...(p.fechaFinProg ? { fechaFinProg: new Date(p.fechaFinProg) } : {}),
+          ...(p.duracionDias !== undefined && p.duracionDias !== null ? { duracionDias: Number(p.duracionDias) } : {}),
+          ...(p.porcentajeAvance !== undefined && p.porcentajeAvance !== null ? { porcentajeAvance: Number(p.porcentajeAvance) } : {})
+        },
+        create: {
+          proyectoId,
+          item: itemCode,
+          descripcion: p.descripcion || 'Sin descripción',
+          unidad: p.unidad || 'glb',
+          metrado: Number(p.metrado) || 1,
+          precioUnitario: Number(p.precioUnitario) || 0,
+          parcialPresupuesto: Number(p.parcialPresupuesto) || 0,
+          fechaInicioProg: p.fechaInicioProg ? new Date(p.fechaInicioProg) : null,
+          fechaFinProg: p.fechaFinProg ? new Date(p.fechaFinProg) : null,
+          duracionDias: p.duracionDias ? Number(p.duracionDias) : null,
+          porcentajeAvance: p.porcentajeAvance ? Number(p.porcentajeAvance) : 0
+        }
+      });
+    })
+  );
 
   revalidatePath('/presupuesto');
   revalidatePath('/');

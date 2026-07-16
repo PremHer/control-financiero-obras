@@ -203,22 +203,32 @@ export default function ProyectosClient({
     }
 
     const rawLines = contentToParse.split(/\r?\n/);
+    const s10RawFiltered = rawLines.filter(raw => {
+      const clean = raw.trim();
+      if (!clean) return false;
+      if (/^S10\s+Página/i.test(clean) || /^Presupuesto\s+\d+/i.test(clean) || /^SALDO DE OBRA/i.test(clean) || /^Cliente\s+/i.test(clean) || /^Lugar\s+/i.test(clean) || /^Ítem\s+Descripción/i.test(clean) || /^Costo\s+al\s+/i.test(clean)) {
+        return false;
+      }
+      if (/^(?:COSTO\s+DIRECTO|GASTOS\s+GENERALES|UTILIDAD|SUB\s*TOTAL|IGV|TOTAL\s+PRESUPUESTO|SUPERVISION|SUPERVISIÓN|GASTOS\s+DE\s+SUPERVISION|EXPEDIENTE|LIQUIDACION|LIQUIDACIÓN|SON:\s*)/i.test(clean)) {
+        return false;
+      }
+      return true;
+    });
+
+    // Normalizador S10 para ordenar líneas donde pdf-parse extrajo la descripción primero ("DEMOLICIÓN... m3 02.06 7.56 27.76 209.87")
+    let fullTextS10 = s10RawFiltered.join(' \n ');
+    fullTextS10 = fullTextS10.replace(
+      /([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9\/\%\-\_\(\)\,\.\+\:\;\s]{2,}?)\s+([a-zA-Z0-9\/\%\-\_]{1,6})\s+(\b\d{2}(?:\.\d{2}){1,4}\b)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)/g,
+      '\n$3 $1 $2 $4 $5 $6\n'
+    );
+    fullTextS10 = fullTextS10.replace(/\s+(\b\d{2}(?:\.\d{2}){0,4}\b\s+[a-zA-ZáéíóúÁÉÍÓÚñÑ])/g, '\n$1');
+
+    const s10NormalizedLines = fullTextS10.split(/\r?\n/);
     const lines: string[] = [];
 
-    // Pre-procesamiento: unir líneas divididas por saltos de página o descripciones largas en S10
-    for (const raw of rawLines) {
+    for (const raw of s10NormalizedLines) {
       const clean = raw.trim();
       if (!clean) continue;
-
-      if (/^S10\s+Página/i.test(clean) || /^Presupuesto\s+\d+/i.test(clean) || /^SALDO DE OBRA/i.test(clean) || /^Cliente\s+/i.test(clean) || /^Lugar\s+/i.test(clean) || /^Ítem\s+Descripción/i.test(clean) || /^Costo\s+al\s+/i.test(clean)) {
-        continue;
-      }
-
-      // Detener en el pie o resumen de página para no cortar la lectura de las siguientes páginas
-      if (/^(?:COSTO\s+DIRECTO|GASTOS\s+GENERALES|UTILIDAD|SUB\s*TOTAL|IGV|TOTAL\s+PRESUPUESTO|SUPERVISION|SUPERVISIÓN|GASTOS\s+DE\s+SUPERVISION|EXPEDIENTE|LIQUIDACION|LIQUIDACIÓN|SON:\s*)/i.test(clean)) {
-        continue;
-      }
-
       if (/^[\d\.\-\_]+\s+/.test(clean) && !/^\d{4,}\s+/.test(clean)) {
         lines.push(clean);
       } else if (lines.length > 0) {
