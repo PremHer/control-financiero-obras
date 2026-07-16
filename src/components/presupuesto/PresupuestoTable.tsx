@@ -346,11 +346,12 @@ export default function PresupuestoTable({
       // a líneas limpias en orden estándar: "02.06 DEMOLICIÓN... m3 7.56 27.76 209.87"
       let fullTextS10 = s10RawFiltered.join(' \n ');
       fullTextS10 = fullTextS10.replace(
-        /([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9\/\%\-\_\(\)\,\.\+\:\;\s]{2,}?)\s+([a-zA-Z0-9\/\%\-\_]{1,6})\s+(\b\d{2}(?:\.\d{2}){1,4}\b)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)/g,
+        /([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9\/\%\-\_\(\)\,\.\+\:\;\s]{2,}?)\s+([a-zA-Z0-9\/\%\-\_]{1,6})\s+(\b(?:0[1-9]|[1-9]\d*)(?:\.\d{1,3})+\b)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)\s+([\d\,\.\-]+)/g,
         '\n$3 $1 $2 $4 $5 $6\n'
       );
-      // Asegurar que cada código de partida o título empiece en su propia línea
-      fullTextS10 = fullTextS10.replace(/\s+(\b\d{2}(?:\.\d{2}){0,4}\b\s+[a-zA-ZáéíóúÁÉÍÓÚñÑ])/g, '\n$1');
+      // Asegurar ruptura de línea antes de cada código jerárquico o título padre de S10
+      fullTextS10 = fullTextS10.replace(/\s+(?=(?:0[1-9]|[1-9]\d*)(?:\.\d{1,3})+\s+[A-ZÁÉÍÓÚÑa-záéíóúñ])/g, '\n');
+      fullTextS10 = fullTextS10.replace(/\s+(?=(?:0[1-9]|[1-9]\d*)\s+[A-ZÁÉÍÓÚÑ]{3,})/g, '\n');
 
       const s10NormalizedLines = fullTextS10.split(/\r?\n/);
       const lines: string[] = [];
@@ -358,7 +359,7 @@ export default function PresupuestoTable({
       for (const raw of s10NormalizedLines) {
         const clean = raw.trim();
         if (!clean) continue;
-        if (/^[\d\.\-\_]+\s+/.test(clean) && !/^\d{4,}\s+/.test(clean)) {
+        if (/^(?:0[1-9]|[1-9]\d*)(?:\.\d{1,3})*\s+/.test(clean) && !/^\d{4,}\s+/.test(clean)) {
           lines.push(clean);
         } else if (lines.length > 0) {
           lines[lines.length - 1] += ' ' + clean;
@@ -431,10 +432,15 @@ export default function PresupuestoTable({
         }
       }
     } else if (tabActual === 'PDF_CRONOGRAMA') {
+      let fullTextCronograma = s10RawFiltered.join(' \n ');
+      fullTextCronograma = fullTextCronograma.replace(/\s+(?=(?:0[1-9]|[1-9]\d*)(?:\.\d{1,3})+\s+[A-ZÁÉÍÓÚÑa-záéíóúñ])/g, '\n');
+      fullTextCronograma = fullTextCronograma.replace(/\s+(?=(?:0[1-9]|[1-9]\d*)\s+[A-ZÁÉÍÓÚÑ]{3,})/g, '\n');
+
+      const cronNormalizedLines = fullTextCronograma.split(/\r?\n/);
       const lines: string[] = [];
-      for (const raw of s10RawFiltered) {
+      for (const raw of cronNormalizedLines) {
         const clean = raw.trim();
-        if (/^[\d\.\-\_]+\s+/.test(clean) && !/^\d{4,}\s+/.test(clean)) {
+        if (/^(?:0[1-9]|[1-9]\d*)(?:\.\d{1,3})*\s+/.test(clean) && !/^\d{4,}\s+/.test(clean)) {
           lines.push(clean);
         } else if (lines.length > 0) {
           lines[lines.length - 1] += ' ' + clean;
