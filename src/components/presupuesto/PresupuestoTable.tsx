@@ -22,6 +22,8 @@ import {
   agregarPartidasAProyecto, 
   eliminarPartida, 
   eliminarTodasLasPartidas,
+  eliminarPresupuestoProyecto,
+  eliminarCronogramaProyecto,
   eliminarPartidasMasivo,
   actualizarCronogramaPartida,
   extraerTextoPDFAction
@@ -45,6 +47,8 @@ interface PartidaRow {
   duracionDias?: number | null;
   porcentajeAvance?: number;
   esTitulo?: boolean;
+  esPresupuesto?: boolean;
+  esCronograma?: boolean;
 }
 
 export default function PresupuestoTable({
@@ -95,10 +99,17 @@ export default function PresupuestoTable({
   const [selectedPartidas, setSelectedPartidas] = useState<string[]>([]);
 
   const handleEliminarTodo = async () => {
-    if (!confirm('¿Estás seguro de ELIMINAR TODAS LAS PARTIDAS de esta obra? Esta acción no se puede deshacer.')) return;
+    const msj = activeView === 'PRESUPUESTO'
+      ? '¿Estás seguro de ELIMINAR TODAS LAS PARTIDAS DEL PRESUPUESTO en esta obra? Esta acción no se puede deshacer.'
+      : '¿Estás seguro de ELIMINAR TODAS LAS PARTIDAS DEL CRONOGRAMA en esta obra? Esta acción no se puede deshacer.';
+    if (!confirm(msj)) return;
     setLoading(true);
     try {
-      await eliminarTodasLasPartidas(proyectoId);
+      if (activeView === 'PRESUPUESTO') {
+        await eliminarPresupuestoProyecto(proyectoId);
+      } else {
+        await eliminarCronogramaProyecto(proyectoId);
+      }
       setSelectedPartidas([]);
       router.refresh();
     } finally {
@@ -108,10 +119,13 @@ export default function PresupuestoTable({
 
   const handleEliminarSeleccionadas = async () => {
     if (selectedPartidas.length === 0) return;
-    if (!confirm(`¿Estás seguro de eliminar las ${selectedPartidas.length} partidas seleccionadas?`)) return;
+    const msj = activeView === 'PRESUPUESTO'
+      ? `¿Estás seguro de eliminar las ${selectedPartidas.length} partidas seleccionadas del PRESUPUESTO?`
+      : `¿Estás seguro de eliminar las ${selectedPartidas.length} partidas seleccionadas del CRONOGRAMA?`;
+    if (!confirm(msj)) return;
     setLoading(true);
     try {
-      await eliminarPartidasMasivo(selectedPartidas, proyectoId);
+      await eliminarPartidasMasivo(selectedPartidas, proyectoId, activeView);
       setSelectedPartidas([]);
       router.refresh();
     } finally {
@@ -151,18 +165,24 @@ export default function PresupuestoTable({
   };
 
   const filtered = partidas
-    .filter(
-      (p) =>
+    .filter((p) => {
+      if (activeView === 'PRESUPUESTO' && p.esPresupuesto === false) return false;
+      if (activeView === 'CRONOGRAMA' && p.esCronograma === false) return false;
+      return (
         p.item.toLowerCase().includes(searchTerm.toLowerCase()) ||
         p.descripcion.toLowerCase().includes(searchTerm.toLowerCase())
-    )
+      );
+    })
     .sort((a, b) => compareEDT(a.item, b.item));
 
-  const totalPresupuestado = partidas.reduce((acc, p) => acc + p.parcialPresupuesto, 0);
-  const totalGastado = partidas.reduce((acc, p) => acc + p.gastado, 0);
+  const partidasPresupuesto = partidas.filter(p => p.esPresupuesto !== false);
+  const partidasCronograma = partidas.filter(p => p.esCronograma !== false);
+
+  const totalPresupuestado = partidasPresupuesto.reduce((acc, p) => acc + p.parcialPresupuesto, 0);
+  const totalGastado = partidasPresupuesto.reduce((acc, p) => acc + p.gastado, 0);
   const totalSaldo = totalPresupuestado - totalGastado;
-  const avanceFisicoPromedio = partidas.length > 0
-    ? partidas.reduce((acc, p) => acc + (p.porcentajeAvance || 0), 0) / partidas.length
+  const avanceFisicoPromedio = partidasCronograma.length > 0
+    ? partidasCronograma.reduce((acc, p) => acc + (p.porcentajeAvance || 0), 0) / partidasCronograma.length
     : 0;
 
   // ==========================================
@@ -174,6 +194,7 @@ export default function PresupuestoTable({
 
     setLoading(true);
     try {
+      const tipoPartida = activeView === 'PRESUPUESTO' ? 'presupuesto' : 'cronograma';
       await agregarPartidaIndividual({
         proyectoId,
         item,
@@ -183,7 +204,8 @@ export default function PresupuestoTable({
         precioUnitario: Number(precioUnitario),
         fechaInicioProg: fechaInicioProg || undefined,
         fechaFinProg: fechaFinProg || undefined,
-        duracionDias: duracionDias !== '' ? Number(duracionDias) : undefined
+        duracionDias: duracionDias !== '' ? Number(duracionDias) : undefined,
+        tipo: tipoPartida
       });
       setShowAddModal(false);
       resetAddForm();
@@ -205,10 +227,13 @@ export default function PresupuestoTable({
   };
 
   const handleDelete = async (id: string, itemStr: string) => {
-    if (!window.confirm(`¿Seguro de eliminar la partida "${itemStr}" y sus transacciones financieras?`)) return;
+    const msj = activeView === 'PRESUPUESTO'
+      ? `¿Seguro de eliminar la partida "${itemStr}" del Presupuesto y sus transacciones?`
+      : `¿Seguro de eliminar la partida "${itemStr}" del Cronograma?`;
+    if (!window.confirm(msj)) return;
     setLoadingDelete(id);
     try {
-      await eliminarPartida(id);
+      await eliminarPartida(id, activeView);
       router.refresh();
     } finally {
       setLoadingDelete(null);
@@ -539,6 +564,17 @@ export default function PresupuestoTable({
     // Post-proceso: identificar qué ítems son padres (ej: "01", "01.01" si existe "01.01.01") para no duplicar sumas
     const itemsSet = new Set(parsed.map(p => p.item));
     for (const p of parsed) {
+      if (tabActual === 'PDF_PRESUPUESTO') {
+        p.esPresupuesto = true;
+        p.esCronograma = false;
+      } else if (tabActual === 'PDF_CRONOGRAMA') {
+        p.esPresupuesto = false;
+        p.esCronograma = true;
+      } else {
+        p.esPresupuesto = true;
+        p.esCronograma = true;
+      }
+
       const tieneHijos = parsed.some(otro => otro.item !== p.item && otro.item.startsWith(p.item + '.'));
       if (tieneHijos || p.esTitulo) {
         p.esTitulo = true;
@@ -563,7 +599,8 @@ export default function PresupuestoTable({
     if (partidasDetectadas.length === 0) return;
     setLoading(true);
     try {
-      await agregarPartidasAProyecto(proyectoId, partidasDetectadas, limpiarAlImportar);
+      const tipoImport = importTab === 'PDF_CRONOGRAMA' ? 'cronograma' : (importTab === 'PDF_PRESUPUESTO' ? 'presupuesto' : 'ambos');
+      await agregarPartidasAProyecto(proyectoId, partidasDetectadas, limpiarAlImportar, tipoImport);
       setShowImportModal(false);
       setPartidasDetectadas([]);
       setTextoImport('');
@@ -664,7 +701,7 @@ export default function PresupuestoTable({
               activeView === 'PRESUPUESTO' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
             }`}
           >
-            <DollarSign className="w-4 h-4" /> 💰 1. Control Presupuestal ({partidas.length} partidas)
+            <DollarSign className="w-4 h-4" /> 💰 1. Control Presupuestal ({partidasPresupuesto.length} partidas)
           </button>
           <button
             onClick={() => setActiveView('CRONOGRAMA')}
@@ -672,7 +709,7 @@ export default function PresupuestoTable({
               activeView === 'CRONOGRAMA' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
             }`}
           >
-            <Calendar className="w-4 h-4" /> 📅 2. Cronograma y Avance Físico
+            <Calendar className="w-4 h-4" /> 📅 2. Cronograma y Avance Físico ({partidasCronograma.length} partidas)
           </button>
         </div>
 

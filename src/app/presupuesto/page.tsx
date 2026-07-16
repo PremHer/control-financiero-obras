@@ -45,7 +45,9 @@ export default async function PresupuestoPage() {
       fechaInicioProg: p.fechaInicioProg,
       fechaFinProg: p.fechaFinProg,
       duracionDias: p.duracionDias,
-      porcentajeAvance: p.porcentajeAvance || 0
+      porcentajeAvance: p.porcentajeAvance || 0,
+      esPresupuesto: p.esPresupuesto,
+      esCronograma: p.esCronograma
     };
   });
 

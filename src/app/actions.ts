@@ -92,14 +92,20 @@ export async function crearProyectoConPartidas(
 
     if (partidas && partidas.length > 0) {
       await tx.partida.createMany({
-        data: partidas.map((p) => ({
+        data: partidas.map((p: any) => ({
           proyectoId: nuevoProyecto.id,
           item: p.item || '01',
           descripcion: p.descripcion || 'Sin descripción',
           unidad: p.unidad || 'glb',
           metrado: Number(p.metrado) || 1,
           precioUnitario: Number(p.precioUnitario) || 0,
-          parcialPresupuesto: Number(p.parcialPresupuesto) || 0
+          parcialPresupuesto: Number(p.parcialPresupuesto) || 0,
+          duracionDias: p.duracionDias ? Number(p.duracionDias) : null,
+          fechaInicioProg: p.fechaInicioProg ? new Date(p.fechaInicioProg) : null,
+          fechaFinProg: p.fechaFinProg ? new Date(p.fechaFinProg) : null,
+          porcentajeAvance: p.porcentajeAvance ? Number(p.porcentajeAvance) : 0,
+          esPresupuesto: p.esPresupuesto !== undefined ? p.esPresupuesto : true,
+          esCronograma: p.esCronograma !== undefined ? p.esCronograma : false
         }))
       });
     }
@@ -172,59 +178,153 @@ export async function agregarPartidasAProyecto(
   partidas: Array<{
     item: string;
     descripcion: string;
-    unidad: string;
-    metrado: number;
-    precioUnitario: number;
-    parcialPresupuesto: number;
+    unidad?: string;
+    metrado?: number;
+    precioUnitario?: number;
+    parcialPresupuesto?: number;
     fechaInicioProg?: string;
     fechaFinProg?: string;
     duracionDias?: number;
     porcentajeAvance?: number;
+    esPresupuesto?: boolean;
+    esCronograma?: boolean;
   }>,
-  limpiarAntes: boolean = true
+  limpiarAntes: boolean = true,
+  tipo: 'presupuesto' | 'cronograma' | 'ambos' = 'ambos'
 ) {
   if (!partidas || partidas.length === 0) return { success: false, message: 'No hay partidas para importar' };
 
   await prisma.$transaction(async (tx) => {
     if (limpiarAntes) {
-      await tx.transaccion.deleteMany({ where: { proyectoId, partidaId: { not: null } } });
-      await tx.partida.deleteMany({ where: { proyectoId } });
+      if (tipo === 'presupuesto') {
+        await tx.transaccion.deleteMany({
+          where: { proyectoId, partida: { esCronograma: false } }
+        });
+        await tx.partida.deleteMany({
+          where: { proyectoId, esCronograma: false }
+        });
+        await tx.partida.updateMany({
+          where: { proyectoId, esCronograma: true },
+          data: { esPresupuesto: false, metrado: 0, precioUnitario: 0, parcialPresupuesto: 0 }
+        });
+      } else if (tipo === 'cronograma') {
+        await tx.partida.deleteMany({
+          where: { proyectoId, esPresupuesto: false }
+        });
+        await tx.partida.updateMany({
+          where: { proyectoId, esPresupuesto: true },
+          data: { esCronograma: false, duracionDias: null, fechaInicioProg: null, fechaFinProg: null, porcentajeAvance: 0 }
+        });
+      } else {
+        await tx.transaccion.deleteMany({ where: { proyectoId, partidaId: { not: null } } });
+        await tx.partida.deleteMany({ where: { proyectoId } });
+      }
     }
 
     for (const p of partidas) {
       const itemCode = (p.item || '01').trim();
-      await tx.partida.upsert({
-        where: {
-          proyectoId_item: {
+      const esPres = p.esPresupuesto !== undefined ? p.esPresupuesto : (tipo === 'cronograma' ? false : true);
+      const esCron = p.esCronograma !== undefined ? p.esCronograma : (tipo === 'presupuesto' ? false : true);
+
+      if (tipo === 'presupuesto') {
+        await tx.partida.upsert({
+          where: {
+            proyectoId_item: {
+              proyectoId,
+              item: itemCode
+            }
+          },
+          update: {
+            esPresupuesto: true,
+            descripcion: p.descripcion || 'Sin descripción',
+            unidad: p.unidad || 'glb',
+            metrado: Number(p.metrado) || 1,
+            precioUnitario: Number(p.precioUnitario) || 0,
+            parcialPresupuesto: Number(p.parcialPresupuesto) || 0
+          },
+          create: {
             proyectoId,
-            item: itemCode
+            item: itemCode,
+            esPresupuesto: true,
+            esCronograma: false,
+            descripcion: p.descripcion || 'Sin descripción',
+            unidad: p.unidad || 'glb',
+            metrado: Number(p.metrado) || 1,
+            precioUnitario: Number(p.precioUnitario) || 0,
+            parcialPresupuesto: Number(p.parcialPresupuesto) || 0,
+            porcentajeAvance: 0
           }
-        },
-        update: {
-          descripcion: p.descripcion || 'Sin descripción',
-          unidad: p.unidad || 'glb',
-          metrado: Number(p.metrado) || 1,
-          precioUnitario: Number(p.precioUnitario) || 0,
-          parcialPresupuesto: Number(p.parcialPresupuesto) || 0,
-          ...(p.fechaInicioProg ? { fechaInicioProg: new Date(p.fechaInicioProg) } : {}),
-          ...(p.fechaFinProg ? { fechaFinProg: new Date(p.fechaFinProg) } : {}),
-          ...(p.duracionDias !== undefined && p.duracionDias !== null ? { duracionDias: Number(p.duracionDias) } : {}),
-          ...(p.porcentajeAvance !== undefined && p.porcentajeAvance !== null ? { porcentajeAvance: Number(p.porcentajeAvance) } : {})
-        },
-        create: {
-          proyectoId,
-          item: itemCode,
-          descripcion: p.descripcion || 'Sin descripción',
-          unidad: p.unidad || 'glb',
-          metrado: Number(p.metrado) || 1,
-          precioUnitario: Number(p.precioUnitario) || 0,
-          parcialPresupuesto: Number(p.parcialPresupuesto) || 0,
-          fechaInicioProg: p.fechaInicioProg ? new Date(p.fechaInicioProg) : null,
-          fechaFinProg: p.fechaFinProg ? new Date(p.fechaFinProg) : null,
-          duracionDias: p.duracionDias ? Number(p.duracionDias) : null,
-          porcentajeAvance: p.porcentajeAvance ? Number(p.porcentajeAvance) : 0
-        }
-      });
+        });
+      } else if (tipo === 'cronograma') {
+        await tx.partida.upsert({
+          where: {
+            proyectoId_item: {
+              proyectoId,
+              item: itemCode
+            }
+          },
+          update: {
+            esCronograma: true,
+            descripcion: p.descripcion || 'Sin descripción',
+            ...(p.duracionDias !== undefined && p.duracionDias !== null ? { duracionDias: Number(p.duracionDias) } : {}),
+            ...(p.fechaInicioProg ? { fechaInicioProg: new Date(p.fechaInicioProg) } : {}),
+            ...(p.fechaFinProg ? { fechaFinProg: new Date(p.fechaFinProg) } : {}),
+            ...(p.porcentajeAvance !== undefined && p.porcentajeAvance !== null ? { porcentajeAvance: Number(p.porcentajeAvance) } : {})
+          },
+          create: {
+            proyectoId,
+            item: itemCode,
+            esPresupuesto: false,
+            esCronograma: true,
+            descripcion: p.descripcion || 'Sin descripción',
+            unidad: 'glb',
+            metrado: 1,
+            precioUnitario: 0,
+            parcialPresupuesto: 0,
+            duracionDias: p.duracionDias ? Number(p.duracionDias) : null,
+            fechaInicioProg: p.fechaInicioProg ? new Date(p.fechaInicioProg) : null,
+            fechaFinProg: p.fechaFinProg ? new Date(p.fechaFinProg) : null,
+            porcentajeAvance: p.porcentajeAvance ? Number(p.porcentajeAvance) : 0
+          }
+        });
+      } else {
+        await tx.partida.upsert({
+          where: {
+            proyectoId_item: {
+              proyectoId,
+              item: itemCode
+            }
+          },
+          update: {
+            esPresupuesto: esPres,
+            esCronograma: esCron,
+            descripcion: p.descripcion || 'Sin descripción',
+            unidad: p.unidad || 'glb',
+            metrado: Number(p.metrado) || 1,
+            precioUnitario: Number(p.precioUnitario) || 0,
+            parcialPresupuesto: Number(p.parcialPresupuesto) || 0,
+            ...(p.fechaInicioProg ? { fechaInicioProg: new Date(p.fechaInicioProg) } : {}),
+            ...(p.fechaFinProg ? { fechaFinProg: new Date(p.fechaFinProg) } : {}),
+            ...(p.duracionDias !== undefined && p.duracionDias !== null ? { duracionDias: Number(p.duracionDias) } : {}),
+            ...(p.porcentajeAvance !== undefined && p.porcentajeAvance !== null ? { porcentajeAvance: Number(p.porcentajeAvance) } : {})
+          },
+          create: {
+            proyectoId,
+            item: itemCode,
+            esPresupuesto: esPres,
+            esCronograma: esCron,
+            descripcion: p.descripcion || 'Sin descripción',
+            unidad: p.unidad || 'glb',
+            metrado: Number(p.metrado) || 1,
+            precioUnitario: Number(p.precioUnitario) || 0,
+            parcialPresupuesto: Number(p.parcialPresupuesto) || 0,
+            fechaInicioProg: p.fechaInicioProg ? new Date(p.fechaInicioProg) : null,
+            fechaFinProg: p.fechaFinProg ? new Date(p.fechaFinProg) : null,
+            duracionDias: p.duracionDias ? Number(p.duracionDias) : null,
+            porcentajeAvance: p.porcentajeAvance ? Number(p.porcentajeAvance) : 0
+          }
+        });
+      }
     }
   });
 
@@ -243,6 +343,7 @@ export async function agregarPartidaIndividual(formData: {
   fechaInicioProg?: string;
   fechaFinProg?: string;
   duracionDias?: number;
+  tipo?: 'presupuesto' | 'cronograma' | 'ambos';
 }) {
   const {
     proyectoId,
@@ -253,51 +354,140 @@ export async function agregarPartidaIndividual(formData: {
     precioUnitario,
     fechaInicioProg,
     fechaFinProg,
-    duracionDias
+    duracionDias,
+    tipo = 'presupuesto'
   } = formData;
 
   const itemCode = (item || '01').trim();
-  await prisma.partida.upsert({
-    where: {
-      proyectoId_item: {
+  const esPres = tipo === 'cronograma' ? false : true;
+  const esCron = tipo === 'presupuesto' ? false : true;
+
+  if (tipo === 'presupuesto') {
+    await prisma.partida.upsert({
+      where: {
+        proyectoId_item: {
+          proyectoId,
+          item: itemCode
+        }
+      },
+      update: {
+        esPresupuesto: true,
+        descripcion,
+        unidad,
+        metrado: Number(metrado) || 1,
+        precioUnitario: Number(precioUnitario) || 0,
+        parcialPresupuesto: (Number(metrado) || 1) * (Number(precioUnitario) || 0)
+      },
+      create: {
         proyectoId,
-        item: itemCode
+        item: itemCode,
+        esPresupuesto: true,
+        esCronograma: false,
+        descripcion,
+        unidad,
+        metrado: Number(metrado) || 1,
+        precioUnitario: Number(precioUnitario) || 0,
+        parcialPresupuesto: (Number(metrado) || 1) * (Number(precioUnitario) || 0),
+        porcentajeAvance: 0
       }
-    },
-    update: {
-      descripcion,
-      unidad,
-      metrado: Number(metrado) || 1,
-      precioUnitario: Number(precioUnitario) || 0,
-      parcialPresupuesto: (Number(metrado) || 1) * (Number(precioUnitario) || 0),
-      ...(fechaInicioProg ? { fechaInicioProg: new Date(fechaInicioProg) } : {}),
-      ...(fechaFinProg ? { fechaFinProg: new Date(fechaFinProg) } : {}),
-      ...(duracionDias ? { duracionDias: Number(duracionDias) } : {})
-    },
-    create: {
-      proyectoId,
-      item: itemCode,
-      descripcion,
-      unidad,
-      metrado: Number(metrado) || 1,
-      precioUnitario: Number(precioUnitario) || 0,
-      parcialPresupuesto: (Number(metrado) || 1) * (Number(precioUnitario) || 0),
-      fechaInicioProg: fechaInicioProg ? new Date(fechaInicioProg) : null,
-      fechaFinProg: fechaFinProg ? new Date(fechaFinProg) : null,
-      duracionDias: duracionDias ? Number(duracionDias) : null,
-      porcentajeAvance: 0
-    }
-  });
+    });
+  } else if (tipo === 'cronograma') {
+    await prisma.partida.upsert({
+      where: {
+        proyectoId_item: {
+          proyectoId,
+          item: itemCode
+        }
+      },
+      update: {
+        esCronograma: true,
+        descripcion,
+        ...(fechaInicioProg ? { fechaInicioProg: new Date(fechaInicioProg) } : {}),
+        ...(fechaFinProg ? { fechaFinProg: new Date(fechaFinProg) } : {}),
+        ...(duracionDias ? { duracionDias: Number(duracionDias) } : {})
+      },
+      create: {
+        proyectoId,
+        item: itemCode,
+        esPresupuesto: false,
+        esCronograma: true,
+        descripcion,
+        unidad: 'glb',
+        metrado: 1,
+        precioUnitario: 0,
+        parcialPresupuesto: 0,
+        fechaInicioProg: fechaInicioProg ? new Date(fechaInicioProg) : null,
+        fechaFinProg: fechaFinProg ? new Date(fechaFinProg) : null,
+        duracionDias: duracionDias ? Number(duracionDias) : null,
+        porcentajeAvance: 0
+      }
+    });
+  } else {
+    await prisma.partida.upsert({
+      where: {
+        proyectoId_item: {
+          proyectoId,
+          item: itemCode
+        }
+      },
+      update: {
+        esPresupuesto: esPres,
+        esCronograma: esCron,
+        descripcion,
+        unidad,
+        metrado: Number(metrado) || 1,
+        precioUnitario: Number(precioUnitario) || 0,
+        parcialPresupuesto: (Number(metrado) || 1) * (Number(precioUnitario) || 0),
+        ...(fechaInicioProg ? { fechaInicioProg: new Date(fechaInicioProg) } : {}),
+        ...(fechaFinProg ? { fechaFinProg: new Date(fechaFinProg) } : {}),
+        ...(duracionDias ? { duracionDias: Number(duracionDias) } : {})
+      },
+      create: {
+        proyectoId,
+        item: itemCode,
+        esPresupuesto: esPres,
+        esCronograma: esCron,
+        descripcion,
+        unidad,
+        metrado: Number(metrado) || 1,
+        precioUnitario: Number(precioUnitario) || 0,
+        parcialPresupuesto: (Number(metrado) || 1) * (Number(precioUnitario) || 0),
+        fechaInicioProg: fechaInicioProg ? new Date(fechaInicioProg) : null,
+        fechaFinProg: fechaFinProg ? new Date(fechaFinProg) : null,
+        duracionDias: duracionDias ? Number(duracionDias) : null,
+        porcentajeAvance: 0
+      }
+    });
+  }
 
   revalidatePath('/presupuesto');
   revalidatePath('/');
   return { success: true };
 }
 
-export async function eliminarPartida(id: string) {
+export async function eliminarPartida(id: string, tipo: 'PRESUPUESTO' | 'CRONOGRAMA' | 'AMBOS' = 'AMBOS') {
   await prisma.$transaction(async (tx) => {
-    await tx.transaccion.deleteMany({ where: { partidaId: id } });
-    await tx.partida.delete({ where: { id } });
+    if (tipo === 'PRESUPUESTO') {
+      const p = await tx.partida.findUnique({ where: { id } });
+      if (p && p.esCronograma) {
+        await tx.transaccion.deleteMany({ where: { partidaId: id } });
+        await tx.partida.update({ where: { id }, data: { esPresupuesto: false, metrado: 0, precioUnitario: 0, parcialPresupuesto: 0 } });
+      } else {
+        await tx.transaccion.deleteMany({ where: { partidaId: id } });
+        await tx.partida.delete({ where: { id } });
+      }
+    } else if (tipo === 'CRONOGRAMA') {
+      const p = await tx.partida.findUnique({ where: { id } });
+      if (p && p.esPresupuesto) {
+        await tx.partida.update({ where: { id }, data: { esCronograma: false, duracionDias: null, fechaInicioProg: null, fechaFinProg: null, porcentajeAvance: 0 } });
+      } else {
+        await tx.transaccion.deleteMany({ where: { partidaId: id } });
+        await tx.partida.delete({ where: { id } });
+      }
+    } else {
+      await tx.transaccion.deleteMany({ where: { partidaId: id } });
+      await tx.partida.delete({ where: { id } });
+    }
   });
 
   revalidatePath('/presupuesto');
@@ -316,10 +506,54 @@ export async function eliminarTodasLasPartidas(proyectoId: string) {
   return { success: true };
 }
 
-export async function eliminarPartidasMasivo(partidasIds: string[], proyectoId: string) {
+export async function eliminarPresupuestoProyecto(proyectoId: string) {
   await prisma.$transaction(async (tx) => {
-    await tx.transaccion.deleteMany({ where: { partidaId: { in: partidasIds } } });
-    await tx.partida.deleteMany({ where: { id: { in: partidasIds }, proyectoId } });
+    await tx.transaccion.deleteMany({
+      where: { proyectoId, partida: { esCronograma: false } }
+    });
+    await tx.partida.deleteMany({
+      where: { proyectoId, esCronograma: false }
+    });
+    await tx.partida.updateMany({
+      where: { proyectoId, esCronograma: true },
+      data: { esPresupuesto: false, metrado: 0, precioUnitario: 0, parcialPresupuesto: 0 }
+    });
+  });
+
+  revalidatePath('/presupuesto');
+  revalidatePath('/');
+  return { success: true };
+}
+
+export async function eliminarCronogramaProyecto(proyectoId: string) {
+  await prisma.$transaction(async (tx) => {
+    await tx.partida.deleteMany({
+      where: { proyectoId, esPresupuesto: false }
+    });
+    await tx.partida.updateMany({
+      where: { proyectoId, esPresupuesto: true },
+      data: { esCronograma: false, duracionDias: null, fechaInicioProg: null, fechaFinProg: null, porcentajeAvance: 0 }
+    });
+  });
+
+  revalidatePath('/presupuesto');
+  revalidatePath('/');
+  return { success: true };
+}
+
+export async function eliminarPartidasMasivo(partidasIds: string[], proyectoId: string, tipo: 'PRESUPUESTO' | 'CRONOGRAMA' | 'AMBOS' = 'AMBOS') {
+  await prisma.$transaction(async (tx) => {
+    if (tipo === 'PRESUPUESTO') {
+      await tx.transaccion.deleteMany({ where: { partidaId: { in: partidasIds }, partida: { esCronograma: false } } });
+      await tx.partida.deleteMany({ where: { id: { in: partidasIds }, proyectoId, esCronograma: false } });
+      await tx.partida.updateMany({ where: { id: { in: partidasIds }, proyectoId, esCronograma: true }, data: { esPresupuesto: false, metrado: 0, precioUnitario: 0, parcialPresupuesto: 0 } });
+    } else if (tipo === 'CRONOGRAMA') {
+      await tx.partida.deleteMany({ where: { id: { in: partidasIds }, proyectoId, esPresupuesto: false } });
+      await tx.partida.updateMany({ where: { id: { in: partidasIds }, proyectoId, esPresupuesto: true }, data: { esCronograma: false, duracionDias: null, fechaInicioProg: null, fechaFinProg: null, porcentajeAvance: 0 } });
+    } else {
+      await tx.transaccion.deleteMany({ where: { partidaId: { in: partidasIds } } });
+      await tx.partida.deleteMany({ where: { id: { in: partidasIds }, proyectoId } });
+    }
   });
 
   revalidatePath('/presupuesto');
@@ -339,6 +573,7 @@ export async function actualizarCronogramaPartida(formData: {
   await prisma.partida.update({
     where: { id },
     data: {
+      esCronograma: true,
       fechaInicioProg: fechaInicioProg ? new Date(fechaInicioProg) : null,
       fechaFinProg: fechaFinProg ? new Date(fechaFinProg) : null,
       duracionDias: duracionDias ? Number(duracionDias) : null,
