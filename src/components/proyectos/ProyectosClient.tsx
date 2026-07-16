@@ -216,12 +216,33 @@ export default function ProyectosClient({
     });
 
     // ========================================================================
-    // SEGMENTADOR ROBUSTO PARA PDF S10
+    // SEGMENTADOR ROBUSTO PARA PDF S10 CON NORMALIZACIÓN DE ORDEN INVERTIDO
     // Los códigos S10 usan exactamente 2 dígitos por segmento: 01, 01.01, 03.02.01
-    // Estrategia: unir todo el texto, luego insertar saltos de línea ANTES de cada
-    // código S10 usando el patrón [dígito_fin_monto] [código] [letra_descripción]
+    // Cuando pdf-parse extrae en orden invertido ([Descripción] [Unidad] [Código] [Montos]),
+    // lo normalizamos primero a [Código] [Descripción] [Unidad] [Montos].
     // ========================================================================
-    let fullText = s10RawFiltered.join(' ');
+    const normalizedLines = s10RawFiltered.map(raw => {
+      let line = raw.trim();
+      // Detectar orden invertido donde el código S10 está justo antes de los montos al final:
+      // E.g.: "DESBROCE Y LIMPIEZA DE VEGETACIÓN m2 02.01 3,837.60 1.42 5,449.39" -> "02.01 DESBROCE Y LIMPIEZA DE VEGETACIÓN m2 3,837.60 1.42 5,449.39"
+      const matchInvertido = line.match(/^(.*?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})\s+(\d{2}(?:\.\d{2}){1,5})\s+([\d\,\.\-]+(?:\s+[\d\,\.\-]+){0,2})$/);
+      if (matchInvertido) {
+        const desc = matchInvertido[1].trim();
+        const und = matchInvertido[2].trim();
+        const cod = matchInvertido[3].trim();
+        const nums = matchInvertido[4].trim();
+        line = `${cod} ${desc} ${und} ${nums}`;
+      }
+      return line;
+    });
+
+    let fullText = normalizedLines.join(' ');
+
+    // Por si varios ítems invertidos quedaron unidos en el texto continuo:
+    fullText = fullText.replace(
+      /(\s+|^)([a-zA-ZÁÉÍÓÚÑáéíóúñ0-9\/\%\-\_\(\)\,\.\+\:\;\s]+?)\s+([a-zA-Z0-9\/\%\-\_]{1,8})\s+(\d{2}(?:\.\d{2}){1,5})\s+([\d\,\.\-]+(?:\s+[\d\,\.\-]+){0,2})(?=\s+\d{2}(?:\.\d{2})*\s+|$)/g,
+      '\n$4 $2 $3 $5\n'
+    );
 
     // 1) Insertar \n antes de sub-ítems (códigos CON punto: 01.01, 02.06, 03.01.01)
     fullText = fullText.replace(
