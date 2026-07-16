@@ -21,6 +21,8 @@ import {
   agregarPartidaIndividual, 
   agregarPartidasAProyecto, 
   eliminarPartida, 
+  eliminarTodasLasPartidas,
+  eliminarPartidasMasivo,
   actualizarCronogramaPartida,
   extraerTextoPDFAction
 } from '@/app/actions';
@@ -87,6 +89,51 @@ export default function PresupuestoTable({
   const [textoImport, setTextoImport] = useState('');
   const [errorImport, setErrorImport] = useState('');
   const [partidasDetectadas, setPartidasDetectadas] = useState<any[]>([]);
+  const [limpiarAlImportar, setLimpiarAlImportar] = useState<boolean>(true);
+
+  // Selección múltiple para eliminación
+  const [selectedPartidas, setSelectedPartidas] = useState<string[]>([]);
+
+  const handleEliminarTodo = async () => {
+    if (!confirm('¿Estás seguro de ELIMINAR TODAS LAS PARTIDAS de esta obra? Esta acción no se puede deshacer.')) return;
+    setLoading(true);
+    try {
+      await eliminarTodasLasPartidas(proyectoId);
+      setSelectedPartidas([]);
+      router.refresh();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEliminarSeleccionadas = async () => {
+    if (selectedPartidas.length === 0) return;
+    if (!confirm(`¿Estás seguro de eliminar las ${selectedPartidas.length} partidas seleccionadas?`)) return;
+    setLoading(true);
+    try {
+      await eliminarPartidasMasivo(selectedPartidas, proyectoId);
+      setSelectedPartidas([]);
+      router.refresh();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedPartidas(filtered.map(p => p.id));
+    } else {
+      setSelectedPartidas([]);
+    }
+  };
+
+  const handleSelectOne = (id: string, checked: boolean) => {
+    if (checked) {
+      setSelectedPartidas(prev => [...prev, id]);
+    } else {
+      setSelectedPartidas(prev => prev.filter(item => item !== id));
+    }
+  };
 
   // Función de comparación jerárquica natural para códigos EDT / WBS (Ej: 1.1 < 1.2 < 1.10 < 1.10.1)
   const compareEDT = (itemA: string, itemB: string) => {
@@ -462,10 +509,11 @@ export default function PresupuestoTable({
     if (partidasDetectadas.length === 0) return;
     setLoading(true);
     try {
-      await agregarPartidasAProyecto(proyectoId, partidasDetectadas);
+      await agregarPartidasAProyecto(proyectoId, partidasDetectadas, limpiarAlImportar);
       setShowImportModal(false);
       setPartidasDetectadas([]);
       setTextoImport('');
+      setSelectedPartidas([]);
       router.refresh();
     } finally {
       setLoading(false);
@@ -509,6 +557,25 @@ export default function PresupuestoTable({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          {selectedPartidas.length > 0 && (
+            <button
+              onClick={handleEliminarSeleccionadas}
+              disabled={loading}
+              className="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 transition shadow-lg shadow-rose-600/20 animate-pulse"
+            >
+              <Trash2 className="w-4 h-4" /> Eliminar Seleccionadas ({selectedPartidas.length})
+            </button>
+          )}
+          {partidas.length > 0 && (
+            <button
+              onClick={handleEliminarTodo}
+              disabled={loading}
+              title="Eliminar todas las partidas de esta obra"
+              className="px-3.5 py-2.5 bg-rose-950/80 hover:bg-rose-900 text-rose-300 font-bold rounded-xl text-xs flex items-center gap-1.5 border border-rose-800/60 transition"
+            >
+              <Trash2 className="w-4 h-4 text-rose-400" /> Eliminar Todo
+            </button>
+          )}
           <button
             onClick={() => setShowAddModal(true)}
             className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 transition shadow-lg shadow-blue-600/20"
@@ -581,6 +648,14 @@ export default function PresupuestoTable({
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="bg-slate-950 border-b border-slate-800 text-slate-400 font-semibold uppercase">
+                  <th className="py-3.5 px-3 text-center w-10">
+                    <input
+                      type="checkbox"
+                      checked={filtered.length > 0 && selectedPartidas.length === filtered.length}
+                      onChange={(e) => handleSelectAll(e.target.checked)}
+                      className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer"
+                    />
+                  </th>
                   <th className="py-3.5 px-4 font-mono">Ítem</th>
                   <th className="py-3.5 px-4">Descripción de Partida</th>
                   <th className="py-3.5 px-4 text-center">Und.</th>
@@ -595,7 +670,7 @@ export default function PresupuestoTable({
               <tbody className="divide-y divide-slate-800/60">
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-8 text-center text-slate-500">
+                    <td colSpan={10} className="py-8 text-center text-slate-500">
                       No hay partidas registradas en esta obra. Pulsa <span className="text-blue-400 font-bold">+ Agregar Partida</span> o <span className="text-purple-400 font-bold">📥 Importar PDF / Excel</span>.
                     </td>
                   </tr>
@@ -605,6 +680,7 @@ export default function PresupuestoTable({
                     const partesItem = p.item.split(/[\.\-\_]/).filter(Boolean);
                     const nivel = Math.max(0, partesItem.length - 1);
                     const esPadre = p.esTitulo || p.unidad === 'TITULO' || filtered.some((o) => o.item !== p.item && o.item.startsWith(p.item + '.'));
+                    const isChecked = selectedPartidas.includes(p.id);
 
                     return (
                       <tr
@@ -613,8 +689,16 @@ export default function PresupuestoTable({
                           esPadre
                             ? 'bg-slate-950/90 font-bold border-t border-slate-800 text-amber-200'
                             : 'hover:bg-slate-800/40 text-slate-300'
-                        }`}
+                        } ${isChecked ? 'bg-blue-950/40 border-l-2 border-l-blue-500' : ''}`}
                       >
+                        <td className="py-3.5 px-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => handleSelectOne(p.id, e.target.checked)}
+                            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-0 cursor-pointer"
+                          />
+                        </td>
                         <td className="py-3.5 px-4 font-mono font-bold whitespace-nowrap" style={{ paddingLeft: `${nivel * 1.5 + 1}rem` }}>
                           <span className={esPadre ? 'text-amber-400' : 'text-blue-400'}>
                             {esPadre && (nivel === 0 ? '📂 ' : '└─ ')}
@@ -679,6 +763,14 @@ export default function PresupuestoTable({
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="bg-slate-950 border-b border-slate-800 text-slate-400 font-semibold uppercase">
+                  <th className="py-3.5 px-3 text-center w-10">
+                    <input
+                      type="checkbox"
+                      checked={filtered.length > 0 && selectedPartidas.length === filtered.length}
+                      onChange={(e) => handleSelectAll(e.target.checked)}
+                      className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-purple-600 focus:ring-0 cursor-pointer"
+                    />
+                  </th>
                   <th className="py-3.5 px-4 font-mono">Ítem</th>
                   <th className="py-3.5 px-4">Descripción de Partida</th>
                   <th className="py-3.5 px-4 text-center">Duración</th>
@@ -691,7 +783,7 @@ export default function PresupuestoTable({
               <tbody className="divide-y divide-slate-800/60">
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-8 text-center text-slate-500">
+                    <td colSpan={8} className="py-8 text-center text-slate-500">
                       No hay partidas registradas en esta obra.
                     </td>
                   </tr>
@@ -701,6 +793,7 @@ export default function PresupuestoTable({
                     const partesItem = p.item.split(/[\.\-\_]/).filter(Boolean);
                     const nivel = Math.max(0, partesItem.length - 1);
                     const esPadre = p.esTitulo || p.unidad === 'TITULO' || filtered.some((o) => o.item !== p.item && o.item.startsWith(p.item + '.'));
+                    const isChecked = selectedPartidas.includes(p.id);
 
                     return (
                       <tr
@@ -709,8 +802,16 @@ export default function PresupuestoTable({
                           esPadre
                             ? 'bg-purple-950/40 font-bold border-t border-purple-900/60 text-purple-200'
                             : 'hover:bg-slate-800/40 text-slate-300'
-                        }`}
+                        } ${isChecked ? 'bg-purple-950/60 border-l-2 border-l-purple-500' : ''}`}
                       >
+                        <td className="py-3.5 px-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => handleSelectOne(p.id, e.target.checked)}
+                            className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-purple-600 focus:ring-0 cursor-pointer"
+                          />
+                        </td>
                         <td className="py-3.5 px-4 font-mono font-bold whitespace-nowrap" style={{ paddingLeft: `${nivel * 1.5 + 1}rem` }}>
                           <span className={esPadre ? 'text-purple-300' : 'text-purple-400'}>
                             {esPadre && (nivel === 0 ? '📂 ' : '└─ ')}
@@ -1074,16 +1175,27 @@ export default function PresupuestoTable({
                 </div>
               )}
 
-              <div className="pt-4 flex justify-end gap-3 border-t border-slate-800">
-                <button type="button" onClick={() => setShowImportModal(false)} className="px-4 py-2.5 bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold">Cancelar</button>
-                <button
-                  type="button"
-                  onClick={handleImportBatch}
-                  disabled={loading || partidasDetectadas.length === 0}
-                  className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white font-bold rounded-xl text-xs shadow-lg transition"
-                >
-                  {loading ? 'Importando en bloque...' : `Importar ${partidasDetectadas.length} Partidas a "${nombreProyecto}"`}
-                </button>
+              <div className="pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-slate-800">
+                <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer bg-slate-950 p-2.5 rounded-xl border border-slate-800/80 hover:bg-slate-900 transition">
+                  <input
+                    type="checkbox"
+                    checked={limpiarAlImportar}
+                    onChange={(e) => setLimpiarAlImportar(e.target.checked)}
+                    className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-emerald-600 focus:ring-0 cursor-pointer"
+                  />
+                  <span><strong className="text-emerald-400">Reemplazar y limpiar</strong> todas las partidas anteriores de esta obra</span>
+                </label>
+                <div className="flex justify-end gap-3">
+                  <button type="button" onClick={() => setShowImportModal(false)} className="px-4 py-2.5 bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold">Cancelar</button>
+                  <button
+                    type="button"
+                    onClick={handleImportBatch}
+                    disabled={loading || partidasDetectadas.length === 0}
+                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white font-bold rounded-xl text-xs shadow-lg transition"
+                  >
+                    {loading ? 'Importando en bloque...' : `Importar ${partidasDetectadas.length} Partidas a "${nombreProyecto}"`}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

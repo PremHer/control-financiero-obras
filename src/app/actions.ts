@@ -180,14 +180,20 @@ export async function agregarPartidasAProyecto(
     fechaFinProg?: string;
     duracionDias?: number;
     porcentajeAvance?: number;
-  }>
+  }>,
+  limpiarAntes: boolean = true
 ) {
   if (!partidas || partidas.length === 0) return { success: false, message: 'No hay partidas para importar' };
 
-  await prisma.$transaction(
-    partidas.map((p) => {
+  await prisma.$transaction(async (tx) => {
+    if (limpiarAntes) {
+      await tx.transaccion.deleteMany({ where: { proyectoId, partidaId: { not: null } } });
+      await tx.partida.deleteMany({ where: { proyectoId } });
+    }
+
+    for (const p of partidas) {
       const itemCode = (p.item || '01').trim();
-      return prisma.partida.upsert({
+      await tx.partida.upsert({
         where: {
           proyectoId_item: {
             proyectoId,
@@ -219,8 +225,8 @@ export async function agregarPartidasAProyecto(
           porcentajeAvance: p.porcentajeAvance ? Number(p.porcentajeAvance) : 0
         }
       });
-    })
-  );
+    }
+  });
 
   revalidatePath('/presupuesto');
   revalidatePath('/');
@@ -250,20 +256,36 @@ export async function agregarPartidaIndividual(formData: {
     duracionDias
   } = formData;
 
-  const parcialPresupuesto = Number(metrado) * Number(precioUnitario);
-
-  await prisma.partida.create({
-    data: {
-      proyectoId,
-      item,
+  const itemCode = (item || '01').trim();
+  await prisma.partida.upsert({
+    where: {
+      proyectoId_item: {
+        proyectoId,
+        item: itemCode
+      }
+    },
+    update: {
       descripcion,
       unidad,
-      metrado: Number(metrado),
-      precioUnitario: Number(precioUnitario),
-      parcialPresupuesto,
+      metrado: Number(metrado) || 1,
+      precioUnitario: Number(precioUnitario) || 0,
+      parcialPresupuesto: (Number(metrado) || 1) * (Number(precioUnitario) || 0),
+      ...(fechaInicioProg ? { fechaInicioProg: new Date(fechaInicioProg) } : {}),
+      ...(fechaFinProg ? { fechaFinProg: new Date(fechaFinProg) } : {}),
+      ...(duracionDias ? { duracionDias: Number(duracionDias) } : {})
+    },
+    create: {
+      proyectoId,
+      item: itemCode,
+      descripcion,
+      unidad,
+      metrado: Number(metrado) || 1,
+      precioUnitario: Number(precioUnitario) || 0,
+      parcialPresupuesto: (Number(metrado) || 1) * (Number(precioUnitario) || 0),
       fechaInicioProg: fechaInicioProg ? new Date(fechaInicioProg) : null,
       fechaFinProg: fechaFinProg ? new Date(fechaFinProg) : null,
-      duracionDias: duracionDias ? Number(duracionDias) : null
+      duracionDias: duracionDias ? Number(duracionDias) : null,
+      porcentajeAvance: 0
     }
   });
 
@@ -276,6 +298,28 @@ export async function eliminarPartida(id: string) {
   await prisma.$transaction(async (tx) => {
     await tx.transaccion.deleteMany({ where: { partidaId: id } });
     await tx.partida.delete({ where: { id } });
+  });
+
+  revalidatePath('/presupuesto');
+  revalidatePath('/');
+  return { success: true };
+}
+
+export async function eliminarTodasLasPartidas(proyectoId: string) {
+  await prisma.$transaction(async (tx) => {
+    await tx.transaccion.deleteMany({ where: { proyectoId, partidaId: { not: null } } });
+    await tx.partida.deleteMany({ where: { proyectoId } });
+  });
+
+  revalidatePath('/presupuesto');
+  revalidatePath('/');
+  return { success: true };
+}
+
+export async function eliminarPartidasMasivo(partidasIds: string[], proyectoId: string) {
+  await prisma.$transaction(async (tx) => {
+    await tx.transaccion.deleteMany({ where: { partidaId: { in: partidasIds } } });
+    await tx.partida.deleteMany({ where: { id: { in: partidasIds }, proyectoId } });
   });
 
   revalidatePath('/presupuesto');
